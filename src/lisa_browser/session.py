@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 import unicodedata
 from typing import Any
 
+import httpx
+from arc_cua.backends.cdp import CDPConnection, browser_ws_url
 from arc_cua.backends.chrome import ChromeBackend
+
+log = logging.getLogger(__name__)
 
 _READ_JS = "document.body ? document.body.innerText : ''"
 _STATUS_JS = (
@@ -129,8 +134,25 @@ class Browser:
 
     @classmethod
     def connect(cls, endpoint: str) -> Browser:
-        """Abre una pestaña en el Chromium del contenedor."""
-        return cls(ChromeBackend.connect(endpoint))
+        """Se une al Chromium del contenedor y sigue en la pestaña en la que estaba.
+
+        Reutiliza la pestaña usada más recientemente y cierra las demás: una reconexión
+        no pierde la página abierta ni va dejando pestañas olvidadas.
+        """
+        base = endpoint.rstrip("/")
+        # Chromium lista las pestañas de la más reciente a la más antigua.
+        pages = [t for t in httpx.get(base + "/json/list", timeout=5).json() if t.get("type") == "page"]
+        connection = CDPConnection(browser_ws_url(base))
+        if pages:
+            target_id = pages[0]["id"]
+            for stale in pages[1:]:
+                try:
+                    connection.call("Target.closeTarget", {"targetId": stale["id"]})
+                except Exception:
+                    log.debug("no se pudo cerrar la pestaña %s", stale.get("id"), exc_info=True)
+        else:
+            target_id = connection.call("Target.createTarget", {"url": "about:blank"})["targetId"]
+        return cls(ChromeBackend(connection, target_id))
 
     def close(self) -> None:
         self.backend.close()

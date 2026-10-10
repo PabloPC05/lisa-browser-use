@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import unittest
 
-from lisa_browser.session import excerpt
+import httpx
+
+from lisa_browser.session import Browser, excerpt
 from tests.site import Site
 from tests.support import launch_browser
 
@@ -40,6 +42,39 @@ class OpenAndRead(SessionCase):
         read = self.browser.read(max_chars=100)
         self.assertEqual(len(read["text"]), 100)
         self.assertTrue(read["truncated"])
+
+
+class ConnectKeepsTheTab(SessionCase):
+    def endpoint(self) -> str:
+        return "http://" + self.browser.backend._process.ws_url.split("/")[2]
+
+    def pages(self) -> list[dict]:
+        return [t for t in httpx.get(self.endpoint() + "/json/list").json() if t["type"] == "page"]
+
+    def test_a_new_connection_continues_on_the_open_page(self) -> None:
+        self.browser.open(self.site.url("/horarios"))
+        other = Browser.connect(self.endpoint())
+        try:
+            self.assertEqual(other.read()["url"], self.site.url("/horarios"))
+            self.assertEqual(len(self.pages()), 1)
+        finally:
+            other.close()
+        # Cerrar esa conexión no cierra la pestaña.
+        self.assertEqual(self.browser.read()["title"], "Horarios")
+
+    def test_forgotten_tabs_are_closed_and_the_most_recent_one_is_kept(self) -> None:
+        for _ in range(2):
+            self.browser.backend._conn.call("Target.createTarget", {"url": "about:blank"})
+        before = self.pages()
+        self.assertEqual(len(before), 3)
+        other = Browser.connect(self.endpoint())
+        try:
+            # Queda una sola pestaña: la primera de la lista de Chromium, que es la más reciente.
+            self.assertEqual([p["id"] for p in self.pages()], [before[0]["id"]])
+            self.assertEqual(other.backend.target_id, before[0]["id"])
+            self.assertTrue(other.open(self.site.url("/horarios"))["ok"])
+        finally:
+            other.close()
 
 
 class ReadWithFind(SessionCase):

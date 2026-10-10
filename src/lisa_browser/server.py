@@ -257,6 +257,15 @@ class Executor:
         raise ValueError(f"operación desconocida: {op}")
 
     def _ensure_browser(self) -> Browser:
+        if self._browser is not None and self._browser_is_dead():
+            # La conexión con Chromium se pierde tras un rato sin uso: se rehace antes de empezar,
+            # cuando todavía no se ha hecho nada de la operación.
+            log.info("conexión con Chromium perdida; se vuelve a conectar")
+            try:
+                self._browser.close()
+            except Exception:
+                pass
+            self._browser = self._files = None
         if self._browser is None:
             self._browser = self._connect()
             self._files = self._files_for(self._browser)

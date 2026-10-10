@@ -16,6 +16,7 @@ from lisa_browser.files import Files
 from lisa_browser.journal import Journal
 from lisa_browser.runner import Limits
 from lisa_browser.server import Executor, Settings, make_app
+from lisa_browser.session import Browser
 from lisa_browser.vault import Entry, FakeVault
 from tests.site import Site, page
 from tests.support import ByName, launch_browser
@@ -326,6 +327,18 @@ class FilesOverHttp(ServerCase):
         fetched = await self.client.get(f"/v1/downloads/{download['id']}", headers=AUTH)
         self.assertEqual(await fetched.read(), PDF)
         self.assertEqual((await self.client.get("/v1/downloads/d_nada", headers=AUTH)).status, 404)
+
+
+class LostConnection(ServerCase):
+    def connect(self):
+        return Browser.connect("http://" + self.browser.backend._process.ws_url.split("/")[2])
+
+    async def test_a_dropped_connection_is_rebuilt_before_the_operation_and_the_page_is_kept(self) -> None:
+        await self.open("/horarios")
+        self.executor._browser.backend._conn.close()  # lo que pasa tras un rato sin uso
+        events = await self.op("read")
+        self.assertIn("9:00 a 21:00", self.done(events)["text"])
+        self.assertEqual(self.done(events)["title"], "Horarios")
 
 
 class BrowserDown(ServerCase):
