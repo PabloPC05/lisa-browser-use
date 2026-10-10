@@ -75,11 +75,11 @@ class LoginCase(unittest.TestCase):
         self.code_requests.append((domain, timeout))
         return self.codes.pop(0) if self.codes else None
 
-    def login(self, path: str, steps, vault=None, host: str = "socios.test"):
+    def login(self, path: str, steps, vault=None, host: str = "socios.test", **options):
         self.assertTrue(self.browser.open(self.site.url(path, host))["ok"])
         return login(
             self.browser, ByName(steps), vault if vault is not None else FakeVault([ENTRY]),
-            ask_code=self.ask_code, on_secret=self.secrets.append, on_step=self.steps.append,
+            ask_code=self.ask_code, on_secret=self.secrets.append, on_step=self.steps.append, **options,
         )
 
     def where(self) -> str:
@@ -92,6 +92,37 @@ class LogsIn(LoginCase):
         self.assertEqual(result, {"status": "ok", "domain": "socios.test"})
         self.assertEqual(self.where(), "dentro")
         self.assertEqual(self.code_requests, [])
+
+
+class SeveralAccounts(LoginCase):
+    OTHER = Entry("e2", "Biblioteca (cuenta antigua)", "13579@socios.test", "otra-clave-0000", ("http://socios.test/",))
+
+    def vault(self) -> FakeVault:
+        return FakeVault([self.OTHER, ENTRY])
+
+    def test_with_several_accounts_nothing_is_typed_until_one_is_chosen(self) -> None:
+        self.site.requests.clear()
+        result = self.login("/login", TYPE_AND_ENTER, vault=self.vault())
+        self.assertEqual((result["status"], result["domain"]), ("choose_account", "socios.test"))
+        self.assertEqual(
+            result["accounts"],
+            [{"name": self.OTHER.name, "username": self.OTHER.username}, {"name": ENTRY.name, "username": USER}],
+        )
+        self.assertNotIn("clave", json.dumps(result))
+        self.assertEqual((self.where(), self.steps, self.secrets), ("login", [], []))
+        self.assertEqual(self.site.posts(), [])
+
+    def test_the_chosen_account_is_the_one_used(self) -> None:
+        result = self.login("/login", TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)], vault=self.vault(), account=USER[:4].upper())
+        self.assertEqual(result, {"status": "ok", "domain": "socios.test"})
+        # La contraseña que se usó es la de la cuenta elegida, no la de la primera entrada.
+        self.assertEqual(self.secrets, [PASSWORD])
+        self.assertEqual(self.where(), "dentro")
+
+    def test_a_hint_that_fits_several_accounts_still_asks(self) -> None:
+        result = self.login("/login", TYPE_AND_ENTER, vault=self.vault(), account="biblioteca")
+        self.assertEqual((result["status"], len(result["accounts"])), ("choose_account", 2))
+        self.assertEqual(self.secrets, [])
 
 
 class SecretNeverLeaves(LoginCase):

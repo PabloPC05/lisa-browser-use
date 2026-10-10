@@ -249,6 +249,7 @@ class Executor:
                 ask_code=lambda domain, timeout: operation.ask("secret", timeout, kind="code", domain=domain),
                 on_secret=lambda value: self._journal.add_secret(journal_id, value),
                 on_step=on_step, code_seconds=self.settings.code_seconds, cancel=operation.cancel, usage=self._usage,
+                account=str(args.get("account") or ""),
             )
             if result["status"] == "ok":
                 self._journal.session_opened(result["domain"])

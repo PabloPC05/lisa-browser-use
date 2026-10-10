@@ -62,11 +62,15 @@ def login(
     on_step: Callable[[dict], None] | None = None,
     limits: Limits = Limits(max_actions=12),
     code_seconds: float = CODE_SECONDS,
+    account: str = "",
     **options: Any,
 ) -> dict[str, Any]:
     """Devuelve `{status, domain, reason?}`.
 
-    `status`: `ok`, `no_credentials`, `wrong_domain`, `rejected` o `vault_unavailable`.
+    `status`: `ok`, `no_credentials`, `wrong_domain`, `rejected`, `vault_unavailable` o
+    `choose_account`. Este último llega con `accounts` cuando el baúl tiene varias cuentas
+    para el sitio: no se escribe nada hasta que `account` (parte del usuario o del nombre
+    de la entrada) señala una sola.
     """
     url = browser._eval("location.href") or ""
     domain = registrable_domain(url)
@@ -77,6 +81,17 @@ def login(
     except VaultUnavailable as exc:
         return {"status": "vault_unavailable", "domain": domain, "reason": str(exc)}
 
+    wanted = account.strip().lower()
+    if wanted:
+        named = [e for e in entries if wanted in e.username.lower() or wanted in e.name.lower()]
+        exact = [e for e in named if wanted == e.username.lower()]
+        entries = exact or named or entries
+    if len(entries) > 1:
+        # Solo hay un intento de contraseña: no se adivina la cuenta.
+        return {
+            "status": "choose_account", "domain": domain,
+            "accounts": [{"name": e.name, "username": e.username} for e in entries],
+        }
     entry = entries[0]
     if on_secret is not None:
         on_secret(entry.password)
