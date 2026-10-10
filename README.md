@@ -12,6 +12,9 @@ Estado: **en construcción**. Ver [TAREAS](../../specs/browser-use/TAREAS.md) pa
 | `runner.py` | Ejecuta una subtarea con límites de pasos y tiempo y devuelve un estado estable, sin secretos |
 | `session.py` | Abrir una página, leer su texto y capturarla |
 | `journal.py` | Registro de operaciones en SQLite, sin secretos |
+| `gate.py` | Barrera de aprobaciones: clasifica cada acción (enviar, borrar, dinero) y pide permiso antes de ejecutarla |
+| `vault.py` | Baúl de contraseñas (Vaultwarden por `bw`) y coincidencia de dominios |
+| `login.py` | Inicio de sesión con el baúl, un solo intento, y segundo factor |
 
 ## Pruebas
 

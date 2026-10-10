@@ -62,8 +62,13 @@ class Site:
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
-    def url(self, path: str = "/") -> str:
-        return f"http://127.0.0.1:{self._server.server_address[1]}{path}"
+    def url(self, path: str = "/", host: str = "127.0.0.1") -> str:
+        """Con `host="banco.test"` el navegador de pruebas llega al mismo sitio por otro dominio."""
+        return f"http://{host}:{self._server.server_address[1]}{path}"
+
+    def posts(self, path: str | None = None) -> list[bytes]:
+        """Cuerpos de las peticiones POST recibidas, opcionalmente a una ruta."""
+        return [body for method, target, body in self.requests if method == "POST" and path in (None, target)]
 
     def __enter__(self) -> Site:
         self._thread.start()

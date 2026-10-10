@@ -14,8 +14,12 @@ from lisa_browser.session import Browser
 _EXTRA_ARGS = tuple(shlex.split(os.environ.get("LISA_TEST_CHROME_ARGS", "")))
 
 
+# Los nombres acabados en .test apuntan al sitio de pruebas: permite probar varios dominios.
+_TEST_DOMAINS = ("--host-resolver-rules=MAP *.test 127.0.0.1",)
+
+
 def launch_browser() -> Browser:
-    return Browser.launch(headless=True, extra_args=_EXTRA_ARGS)
+    return Browser.launch(headless=True, extra_args=_TEST_DOMAINS + _EXTRA_ARGS)
 
 
 class ByName:

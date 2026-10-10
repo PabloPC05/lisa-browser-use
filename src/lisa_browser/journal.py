@@ -77,6 +77,12 @@ class Journal:
             )
         return operation_id
 
+    def add_secret(self, operation_id: str, value: str) -> None:
+        """Añade un valor que aparece a mitad de la operación, como un código de verificación."""
+        if value:
+            known = set(self._secrets.get(operation_id, ())) | {value}
+            self._secrets[operation_id] = tuple(sorted(known, key=len, reverse=True))
+
     def step(
         self, operation_id: str, n: int, action: str, role: str | None, name: str | None,
         ms: int | None, decided_by: str,
