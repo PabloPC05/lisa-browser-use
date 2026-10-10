@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lisa-browser"
+version = "0.1.0"
+description = "Ejecutor de Browser Use de Lisa: JEV sobre los elementos accesibles de Chromium"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+# arc-cua se usa sin modificar y fijada: es una biblioteca joven (0.1.x).
+dependencies = [
+  "arc-cua[browser]==0.1.1",
+  "aiohttp>=3.11,<4",
+  "httpx[http2]>=0.28,<1",
+  "tldextract>=5,<6",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
