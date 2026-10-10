@@ -141,6 +141,35 @@ class Tasks(ServerCase):
         self.assertEqual(self.done(events)["status"], "SUBTASK_COMPLETE")
         self.assertIn("9:00 a 21:00", self.done(await self.op("read"))["text"])
 
+    async def test_open_already_returns_the_start_of_the_text(self) -> None:
+        opened = self.done(await self.op("open", {"url": self.site.url("/horarios")}))
+        self.assertIn("9:00 a 21:00", opened["text"])
+        silent = self.done(await self.op("open", {"url": self.site.url("/horarios"), "read_chars": 0}))
+        self.assertNotIn("text", silent)
+        found = self.done(await self.op("open", {"url": self.site.url("/horarios"), "read_chars": 0, "find": "21:00"}))
+        self.assertEqual(found["matches"], 1)
+        missing = self.done(await self.op("open", {"url": self.site.url("/no-existe")}))
+        self.assertEqual((missing["ok"], "text" in missing), (False, False))
+
+    async def test_task_result_is_brief_and_can_bring_what_is_looked_for(self) -> None:
+        await self.open("/")
+        self.steps("c1", ("CLICK", "Horarios"), ("SUBTASK_COMPLETE",))
+        result = self.done(await self.op("task", {"goal": "Ver horarios", "verification": ["x"], "find": "abre"}))
+        # Dónde ha quedado la página, no su lista de elementos.
+        self.assertEqual(set(result["page"]), {"url", "title", "elements", "more_below"})
+        self.assertEqual((result["page"]["title"], result["page"]["url"]), ("Horarios", self.site.url("/horarios")))
+        self.assertIsInstance(result["page"]["elements"], int)
+        self.assertEqual(result["matches"], 1)
+        self.assertIn("9:00 a 21:00", result["text"])
+        self.assertLess(len(json.dumps(result)), 900)
+
+    async def test_read_with_find_and_offset(self) -> None:
+        await self.open("/horarios")
+        self.assertEqual(self.done(await self.op("read", {"find": "piscina"}))["matches"], 0)
+        whole = self.done(await self.op("read"))["text"]
+        tail = self.done(await self.op("read", {"offset": 5, "max_chars": 10}))["text"]
+        self.assertEqual(tail, whole[5:15])
+
     async def test_every_operation_is_in_the_journal(self) -> None:
         await self.open("/")
         self.steps("c1", ("CLICK", "Horarios"), ("SUBTASK_COMPLETE",))

@@ -92,6 +92,21 @@ class Operation:
         return True
 
 
+def _brief(page: Any) -> dict[str, Any] | None:
+    """De la observación final de arc-cua, solo dónde ha quedado la página."""
+    if not isinstance(page, dict):
+        return None
+    context = page.get("context") or {}
+    return {
+        "url": context.get("url"), "title": context.get("title") or page.get("window"),
+        "elements": len(page.get("elements") or ()), "more_below": bool(context.get("more_below")),
+    }
+
+
+def _text_of(read: dict[str, Any]) -> dict[str, Any]:
+    return {k: read[k] for k in ("text", "matches", "truncated", "total_chars", "next_offset") if k in read}
+
+
 class Executor:
     """Navegador, política de decisión, baúl, archivos y registro compartidos por las operaciones."""
 
@@ -180,10 +195,16 @@ class Executor:
             operation.emit("step", n=step["n"], action=step["action"], target=step["target"], ms=step["ms"])
             self._journal.step(journal_id, step["n"], step["action"], None, step["target"], step["ms"], "jev")
 
+        find = str(args.get("find") or "")
         if op == "open":
-            return browser.open(str(args["url"]))
+            opened = browser.open(str(args["url"]))
+            # Abrir devuelve ya el principio del texto (o lo que se busca): ahorra una lectura aparte.
+            read_chars = int(args.get("read_chars", 1500))
+            if opened["ok"] and (read_chars > 0 or find):
+                opened.update(_text_of(browser.read(read_chars or 1500, find=find)))
+            return opened
         if op == "read":
-            return browser.read(int(args.get("max_chars", 8000)))
+            return browser.read(int(args.get("max_chars", 4000)), find=find, offset=int(args.get("offset", 0)))
         if op == "screenshot":
             operation.emit("screenshot", png=base64.b64encode(browser.screenshot()).decode())
             return {"status": "ok", "sent": True}
@@ -207,13 +228,19 @@ class Executor:
                 return answer if answer in ("once", "deny") else "expired"
 
             payload = {k: args[k] for k in ("goal", "verification", "inputs", "constraints", "max_actions") if k in args}
-            return run_gated_subtask(
+            result = run_gated_subtask(
                 browser, self._policy_for(operation), payload, approve,
                 money_domains=self.settings.money_domains, domain_of=registrable_domain,
                 on_effect=lambda *effect: self._journal.effect(journal_id, *effect),
                 on_step=on_step, cancel=operation.cancel, usage=self._usage,
                 price_per_mtok=self.settings.price_per_mtok, limits=self.settings.limits,
             )
+            # El planificador no necesita la lista de elementos que ya ha usado JEV:
+            # recibe dónde ha quedado la página y, si lo pide, el texto que busca.
+            result["page"] = _brief(result.get("page"))
+            if find:
+                result.update(_text_of(browser.read(int(args.get("read_chars", 1500)), find=find)))
+            return result
         if op == "login":
             if self._vault is None:
                 return {"status": "vault_unavailable", "reason": "no hay baúl configurado"}

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import base64
 import json
+import re
+import unicodedata
 from typing import Any
 
 from arc_cua.backends.chrome import ChromeBackend
@@ -56,6 +58,61 @@ _SHOW_SECRETS_JS = """
 """
 
 
+def _plain(text: str) -> str:
+    normal = unicodedata.normalize("NFD", text)
+    return "".join(ch for ch in normal if unicodedata.category(ch) != "Mn").lower()
+
+
+def _around(line: str, terms: list[str], width: int = 300) -> str:
+    """Una línea muy larga se recorta alrededor de lo que se busca."""
+    if len(line) <= 2 * width:
+        return line
+    plain = _plain(line)
+    at = min((plain.find(t) for t in terms if t in plain), default=0)
+    start, end = max(0, at - width), min(len(line), at + width)
+    return ("…" if start else "") + line[start:end] + ("…" if end < len(line) else "")
+
+
+def excerpt(text: str, *, max_chars: int = 4000, find: str = "", offset: int = 0) -> dict[str, Any]:
+    """La parte de `text` que hace falta leer: desde `offset`, o solo lo que contiene `find`.
+
+    `find` admite varios términos separados por comas; no distingue mayúsculas ni tildes.
+    Cada coincidencia va con la línea anterior y la siguiente.
+    """
+    text = re.sub(r"[ \t\xa0]+\n", "\n", text.replace("\r", ""))
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    max_chars = max(0, int(max_chars))
+    terms = [_plain(t.strip()) for t in find.split(",") if t.strip()]
+    if not terms:
+        start = max(0, int(offset))
+        part = text[start:start + max_chars]
+        out: dict[str, Any] = {"text": part, "truncated": start + max_chars < len(text), "total_chars": len(text)}
+        if out["truncated"]:
+            out["next_offset"] = start + max_chars
+        return out
+
+    lines = [line for line in text.split("\n") if line.strip()]
+    hits = [i for i, line in enumerate(lines) if any(t in _plain(line) for t in terms)]
+    keep: list[int] = []
+    for i in hits:
+        for j in (i - 1, i, i + 1):
+            if 0 <= j < len(lines) and j not in keep:
+                keep.append(j)
+    keep.sort()
+    parts: list[str] = []
+    used, previous, truncated = 0, None, False
+    for j in keep:
+        line = _around(lines[j], terms)
+        gap = "…\n" if previous is not None and j != previous + 1 else ""
+        if used + len(gap) + len(line) + 1 > max_chars:
+            truncated = True
+            break
+        parts.append(gap + line)
+        used += len(gap) + len(line) + 1
+        previous = j
+    return {"text": "\n".join(parts), "matches": len(hits), "truncated": truncated, "total_chars": len(text)}
+
+
 class Browser:
     def __init__(self, backend: ChromeBackend) -> None:
         self.backend = backend
@@ -100,14 +157,15 @@ class Browser:
             "error": None if status == 0 or status < 400 else f"HTTP {status}",
         }
 
-    def read(self, max_chars: int = 8000) -> dict[str, Any]:
-        """Texto visible de la página entera, para que el planificador extraiga datos."""
-        text = self._eval(_READ_JS) or ""
+    def read(self, max_chars: int = 4000, *, find: str = "", offset: int = 0) -> dict[str, Any]:
+        """Texto visible de la página, para que el planificador extraiga datos.
+
+        Con `find` devuelve solo los fragmentos que lo contienen; con `offset` sigue leyendo.
+        """
         return {
             "url": self._eval("location.href"),
             "title": self._eval("document.title") or "",
-            "text": text[:max_chars],
-            "truncated": len(text) > max_chars,
+            **excerpt(self._eval(_READ_JS) or "", max_chars=max_chars, find=find, offset=offset),
         }
 
     def screenshot(self) -> bytes:
