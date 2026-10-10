@@ -35,7 +35,7 @@ PAGES: dict[str, str] = {
 class Site:
     """Servidor HTTP efímero. `with Site() as site: site.url('/horarios')`."""
 
-    def __init__(self, pages: dict[str, str] | None = None) -> None:
+    def __init__(self, pages: dict | None = None) -> None:
         self.pages = dict(PAGES if pages is None else pages)
         self.requests: list[tuple[str, str, bytes]] = []
         site = self
@@ -45,11 +45,17 @@ class Site:
                 length = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(length) if length else b""
                 site.requests.append((self.command, self.path, body))
-                html = site.pages.get(self.path.split("?")[0])
-                status = 200 if html is not None else 404
-                payload = (html if html is not None else page("No encontrado", "<h1>404</h1>")).encode()
+                found = site.pages.get(self.path.split("?")[0])
+                status = 200 if found is not None else 404
+                headers = {"Content-Type": "text/html; charset=utf-8"}
+                if isinstance(found, tuple):  # (tipo de contenido, bytes, cabeceras extra)
+                    headers = {"Content-Type": found[0], **found[2]}
+                    payload = found[1]
+                else:
+                    payload = (found if found is not None else page("No encontrado", "<h1>404</h1>")).encode()
                 self.send_response(status)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
+                for name, value in headers.items():
+                    self.send_header(name, value)
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)

@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS effects (
   action TEXT NOT NULL,
   decision TEXT NOT NULL
 );
+-- Sitios en los que Lisa inició sesión y no la ha cerrado.
+CREATE TABLE IF NOT EXISTS sessions (
+  domain TEXT PRIMARY KEY,
+  since TEXT NOT NULL
+);
 """
 
 
@@ -111,6 +116,22 @@ class Journal:
                 (status, seconds, input_tokens, cost_usd, json.dumps(sorted(set(sites))), operation_id, operation_id),
             )
         self._secrets.pop(operation_id, None)
+
+    def session_opened(self, domain: str) -> None:
+        with self._db:
+            self._db.execute("INSERT OR IGNORE INTO sessions VALUES (?, ?)", (domain, _now()))
+
+    def session_closed(self, domain: str | None = None) -> None:
+        """Olvida la sesión de `domain`, o todas si no se indica."""
+        with self._db:
+            if domain is None:
+                self._db.execute("DELETE FROM sessions")
+            else:
+                self._db.execute("DELETE FROM sessions WHERE domain=?", (domain,))
+
+    def sessions(self) -> list[dict]:
+        rows = self._db.execute("SELECT domain, since FROM sessions ORDER BY domain").fetchall()
+        return [{"domain": d, "since": s} for d, s in rows]
 
     def summary(self, since: str | None = None) -> list[dict]:
         """Operaciones desde `since` (fecha ISO), de la más antigua a la más reciente."""

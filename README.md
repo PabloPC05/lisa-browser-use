@@ -15,6 +15,9 @@ Estado: **en construcción**. Ver [TAREAS](../../specs/browser-use/TAREAS.md) pa
 | `gate.py` | Barrera de aprobaciones: clasifica cada acción (enviar, borrar, dinero) y pide permiso antes de ejecutarla |
 | `vault.py` | Baúl de contraseñas (Vaultwarden por `bw`) y coincidencia de dominios |
 | `login.py` | Inicio de sesión con el baúl, un solo intento, y segundo factor |
+| `files.py` | Adjuntar archivos, recoger descargas, listar y cerrar sesiones |
+| `server.py` | API HTTP del ejecutor: operaciones con eventos, respuestas, cancelación, subidas, descargas y registro |
+| `__main__.py` | Arranque con un archivo de configuración; ver `config.example.toml` |
 
 ## Pruebas
 

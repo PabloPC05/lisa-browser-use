@@ -1,0 +1,38 @@
+# Ejemplo de configuración del ejecutor. Los valores son ficticios.
+
+# Solo en la propia máquina: el puente llega desde lisa-av por la red de QEMU.
+listen = "127.0.0.1:8787"
+# Token que el puente presenta en cada petición. Solo lo leen el ejecutor y el puente.
+token_file = "/run/credentials/lisa-browser.service/executor-token"
+# Chromium del contenedor, por la red interna de Docker. Sin puertos publicados.
+cdp_endpoint = "http://172.30.0.2:9222"
+# Sitios donde se pregunta por defecto ante cualquier botón no reconocido como inofensivo.
+money_domains = []
+
+[jev]
+base_url = "https://api.commandcode.ai/provider/v1/systemone"
+model = "typesafe/jev"
+api_key_file = "/run/credentials/lisa-browser.service/command-code-api-key"
+price_per_mtok = 0.042
+
+[vault]
+server = "https://lisa.example.ts.net"
+client_id_file = "/run/credentials/lisa-browser.service/vault-client-id"
+client_secret_file = "/run/credentials/lisa-browser.service/vault-client-secret"
+master_password_file = "/run/credentials/lisa-browser.service/vault-master-password"
+data_dir = "/var/lib/lisa-browser/bw"
+
+[limits]
+max_actions = 30
+operation_seconds = 300   # no cuenta lo que se espera a Pablo
+# El puente deja de preguntar a los 600 s; este plazo, algo mayor, es solo el respaldo.
+approval_seconds = 630
+code_seconds = 330
+
+[paths]
+journal = "/var/lib/lisa-browser/registro.sqlite"
+downloads = "/var/lib/lisa-navegador/descargas"
+uploads = "/var/lib/lisa-navegador/subidas"
+# Cómo ve Chromium esas mismas carpetas dentro del contenedor.
+downloads_in_browser = "/descargas"
+uploads_in_browser = "/subidas"

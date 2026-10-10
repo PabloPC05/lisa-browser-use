@@ -44,10 +44,14 @@ def run_subtask(
     cancel: threading.Event | None = None,
     usage: Usage | None = None,
     price_per_mtok: float = 0.0,
+    paused: Callable[[], float] | None = None,
 ) -> dict[str, Any]:
     """Devuelve `{status, reason, needs_input, actions_taken, page, metrics}`.
 
     `status`: SUBTASK_COMPLETE, NEEDS_INPUT, NEEDS_AGENT, BLOCKED, LIMIT, QUOTA o CANCELLED.
+
+    `paused()` devuelve los segundos pasados esperando a Pablo (una aprobación): no
+    cuentan para el tiempo máximo de la operación.
     """
     payload = dict(payload)
     requested = payload.get("max_actions", limits.max_actions)
@@ -56,7 +60,9 @@ def run_subtask(
     subtask = subtask_from_dict(payload)
     secrets = subtask.secret_values
 
-    executor = DesktopExecutor(backend, policy, config=RuntimeConfig(timeout_s=limits.operation_seconds))
+    # El tiempo máximo se controla aquí y no en arc-cua, que no sabe descontar las esperas.
+    executor = DesktopExecutor(backend, policy, config=RuntimeConfig(timeout_s=None))
+    timed_out = False
     usage_before = usage.copy() if usage is not None else None
     started = time.monotonic()
     step_ms: list[int] = []
@@ -78,6 +84,9 @@ def run_subtask(
                 result = event.result
             elif cancel is not None and cancel.is_set():
                 executor.cancel()
+            elif time.monotonic() - started - (paused() if paused else 0.0) > limits.operation_seconds:
+                timed_out = True
+                executor.cancel()
     except QuotaExceeded as exc:
         failure = ("QUOTA", str(exc))
     except (JevDesktopError, RuntimeError, ValueError) as exc:
@@ -87,6 +96,8 @@ def run_subtask(
     if result is not None:
         data = result_to_dict(result)
         status, reason = _status(data["status"], data.get("reason"))
+        if timed_out and status == "CANCELLED":
+            status, reason = "LIMIT", "Se alcanzó el tiempo máximo de la operación."
         out = {
             "status": status,
             "reason": reason,
@@ -122,8 +133,6 @@ def _status(arc_status: str, reason: str | None) -> tuple[str, str | None]:
         return arc_status, reason
     if reason.startswith("Execution cancelled"):
         return "CANCELLED", "Cancelado."
-    if reason.startswith("Wall-clock timeout"):
-        return "LIMIT", "Se alcanzó el tiempo máximo de la operación."
     if reason.startswith("Reached agent-supplied action budget"):
         return "LIMIT", "Se alcanzó el número máximo de pasos."
     return arc_status, reason

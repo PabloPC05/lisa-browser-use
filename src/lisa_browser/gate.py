@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 import unicodedata
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
@@ -188,6 +189,7 @@ class GatedBackend:
         self.denied: str | None = None
         self.unreadable = False
         self.money_executed = False
+        self.paused = 0.0  # segundos esperando la decisión de Pablo
 
     def __getattr__(self, name: str) -> Any:
         # observe, is_fresh, settle_probe… los resuelve el backend real.
@@ -242,7 +244,11 @@ class GatedBackend:
 
     def _ask(self, request: ApprovalRequest, snapshot: Any, action: Any) -> None:
         for _ in range(self._max_asks):
-            decision = self._approve(request)
+            waiting = time.monotonic()
+            try:
+                decision = self._approve(request)
+            finally:
+                self.paused += time.monotonic() - waiting
             if self._on_effect is not None:
                 self._on_effect(request.category, request.domain, request.action, decision)
             if decision != "once":
@@ -287,7 +293,7 @@ def run_gated_subtask(
 ) -> dict[str, Any]:
     """Como `run_subtask`, con la barrera puesta. Añade el estado `DENIED`."""
     gate = GatedBackend(browser, approve, money_domains=money_domains, domain_of=domain_of, on_effect=on_effect)
-    result = run_subtask(gate, _StopAfterMoney(policy, gate), payload, **options)
+    result = run_subtask(gate, _StopAfterMoney(policy, gate), payload, paused=lambda: gate.paused, **options)
     if gate.denied is not None:
         result["status"] = "DENIED"
         result["reason"] = "Pablo no permitió la acción." if gate.denied == "deny" else f"Sin aprobación ({gate.denied})."

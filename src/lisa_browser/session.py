@@ -9,6 +9,7 @@ está fijada.
 from __future__ import annotations
 
 import base64
+import json
 from typing import Any
 
 from arc_cua.backends.chrome import ChromeBackend
@@ -18,6 +19,41 @@ _STATUS_JS = (
     "(() => { const n = performance.getEntriesByType('navigation')[0];"
     " return n && typeof n.responseStatus === 'number' ? n.responseStatus : 0; })()"
 )
+
+
+# Durante la captura, el contenido de los campos de contraseña y de código se vuelve
+# transparente: ni siquiera se ve cuántos caracteres hay. Se hace con una hoja de estilos
+# construida desde el script, que funciona aunque la página prohíba estilos en línea.
+# No alcanza a los marcos de otro origen: ahí queda la ocultación normal del navegador.
+_SECRET_FIELDS = (
+    "input[type=password]",
+    "input[autocomplete~=current-password]",
+    "input[autocomplete~=new-password]",
+    "input[autocomplete~=one-time-code]",
+)
+_HIDDEN = (
+    "color: transparent !important; -webkit-text-fill-color: transparent !important; "
+    "text-shadow: none !important; caret-color: transparent !important;"
+)
+_HIDE_SECRETS_CSS = "\n".join(
+    f"{field}, {field}::placeholder, {field}::selection {{ {_HIDDEN} }}" for field in _SECRET_FIELDS
+)
+_HIDE_SECRETS_JS = """
+(() => {
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync(%s);
+  window.__lisaHide = sheet;
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+  return new Promise(done => requestAnimationFrame(() => requestAnimationFrame(() => done(true))));
+})()
+""" % json.dumps(_HIDE_SECRETS_CSS)
+_SHOW_SECRETS_JS = """
+(() => {
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter(sheet => sheet !== window.__lisaHide);
+  delete window.__lisaHide;
+  return true;
+})()
+"""
 
 
 class Browser:
@@ -75,12 +111,18 @@ class Browser:
         }
 
     def screenshot(self) -> bytes:
-        """PNG de lo que se ve. Es para Pablo, no para los modelos."""
-        return base64.b64decode(self._call("Page.captureScreenshot", {"format": "png"})["data"])
+        """PNG de lo que se ve, con los campos de contraseña y de código en blanco. Es para Pablo, no para los modelos."""
+        self._eval(_HIDE_SECRETS_JS)
+        try:
+            return base64.b64decode(self._call("Page.captureScreenshot", {"format": "png"})["data"])
+        finally:
+            self._eval(_SHOW_SECRETS_JS)
 
     def _call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.backend._call(method, params)
 
     def _eval(self, expression: str) -> Any:
-        result = self._call("Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        result = self._call(
+            "Runtime.evaluate", {"expression": expression, "returnByValue": True, "awaitPromise": True}
+        )
         return result.get("result", {}).get("value")
