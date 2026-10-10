@@ -46,6 +46,7 @@ def login_page(after_password: str) -> str:
 LOGIN_PAGES = {
     "/login": login_page("location.href = '/dentro';"),
     "/login-codigo": login_page(_VERIFY),
+    "/login-codigo-sin-marca": login_page(_VERIFY.replace("autocomplete='one-time-code'", "name='code'")),
     "/dentro": page("Tu carné", "<h1>Hola, Pablo</h1><p>Tu carné caduca el 31 de diciembre.</p>"),
     "/portada": page("Portada", "<h1>Portada</h1><p>Sin formulario.</p>"),
 }
@@ -189,6 +190,14 @@ class CodeFromChat(LoginCase):
         self.assertEqual(self.code_requests, [("socios.test", 300)])
         self.assertEqual(self.where(), "dentro")
         self.assertNotIn(CODE, json.dumps([result, self.steps]))
+
+    def test_code_field_without_autocomplete_is_recognised_by_its_name(self) -> None:
+        # Como Amazon: tras la contraseña el paso se da por completo y el campo no lleva autocomplete.
+        steps = TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)] + TYPE_CODE + [("SUBTASK_COMPLETE",)]
+        result = self.login("/login-codigo-sin-marca", steps)
+        self.assertEqual(result, {"status": "ok", "domain": "socios.test"})
+        self.assertEqual(self.code_requests, [("socios.test", 300)])
+        self.assertEqual(self.where(), "dentro")
 
     def test_wrong_code_is_asked_again_once_and_then_gives_up(self) -> None:
         self.codes = ["000000", "111111", CODE]

@@ -77,6 +77,20 @@ class ConnectKeepsTheTab(SessionCase):
             other.close()
 
 
+class PresentAsDesktop(SessionCase):
+    def test_headless_mark_is_removed_and_locale_and_timezone_are_set(self) -> None:
+        self.browser.open(self.site.url("/horarios"))
+        self.assertIn("HeadlessChrome", self.browser._eval("navigator.userAgent"))
+        self.browser.present_as_desktop(locale="es-ES", timezone="Europe/Madrid")
+        self.browser.open(self.site.url("/horarios"))
+        agent = self.browser._eval("navigator.userAgent")
+        self.assertNotIn("Headless", agent)
+        self.assertRegex(agent, r"Chrome/\d+")
+        self.assertEqual(self.browser._eval("navigator.language"), "es-ES")
+        self.assertEqual(self.browser._eval("Intl.DateTimeFormat().resolvedOptions().timeZone"), "Europe/Madrid")
+        self.assertEqual(self.browser._eval("Intl.DateTimeFormat().resolvedOptions().locale"), "es-ES")
+
+
 class ReadWithFind(SessionCase):
     def test_find_returns_only_the_matching_part_of_the_page(self) -> None:
         self.browser.open(self.site.url("/horarios"))

@@ -21,7 +21,11 @@ CODE_ATTEMPTS = 2
 
 _CODE_FIELD = re.compile(r"c[oó]digo|code|otp|verificaci[oó]n|sms|token|2fa|autenticaci[oó]n|clave temporal", re.I)
 HAS_PASSWORD_JS = "[...document.querySelectorAll('input[type=password]')].some((e) => e.offsetParent !== null)"
-_HAS_CODE_JS = "[...document.querySelectorAll('input[autocomplete=one-time-code]')].some((e) => e.offsetParent !== null)"
+# Muchos sitios (Amazon entre ellos) no marcan el campo con autocomplete=one-time-code: se mira también su nombre.
+_HAS_CODE_JS = (
+    "[...document.querySelectorAll('input:not([type=hidden]):not([type=password])')].some((e) => e.offsetParent !== null && ("
+    "e.autocomplete === 'one-time-code' || [e.name, e.id].some((s) => /^(code|c[oó]digo)$|otp|one.?time|verif|2fa|mfa/i.test(s))))"
+)
 
 # ask_code(domain, timeout_seconds) -> código, o None si Pablo no contesta a tiempo.
 AskCode = Callable[[str, float], str | None]
