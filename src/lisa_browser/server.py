@@ -28,15 +28,17 @@ from .gate import ApprovalRequest, run_gated_subtask
 from .jev import Usage
 from .journal import Journal
 from .library import Library, LibraryError, MissingParams, substitute
-from .login import HAS_PASSWORD_JS, login
+from .login import HAS_PASSWORD_JS, login, save_password
 from .runner import Limits
 from .session import Browser
 from .vault import Vault, registrable_domain
 
 log = logging.getLogger(__name__)
 
-OPS = ("open", "task", "read", "login", "attach", "screenshot", "sessions", "logout", "log", "routine")
-_COLLECT_AFTER = ("open", "task", "login", "routine")
+OPS = (
+    "open", "task", "read", "login", "save_password", "attach", "screenshot", "sessions", "logout", "log", "routine",
+)
+_COLLECT_AFTER = ("open", "task", "login", "save_password", "routine")
 
 
 @dataclass(frozen=True)
@@ -264,15 +266,21 @@ class Executor:
             if find:
                 result.update(_text_of(browser.read(int(args.get("read_chars", 1500)), find=find)))
             return result
-        if op == "login":
+        if op in ("login", "save_password"):
             if self._vault is None:
                 return {"status": "vault_unavailable", "reason": "no hay baúl configurado"}
-            result = login(
+            options: dict[str, Any] = {}
+            if op == "save_password":
+                # La contraseña nueva la escribe Pablo en el chat: va del puente al ejecutor sin pasar por el agente.
+                options["ask_password"] = lambda domain, username, timeout: operation.ask(
+                    "secret", timeout, kind="password", domain=domain, username=username,
+                )
+            result = (save_password if op == "save_password" else login)(
                 browser, self._policy_for(operation), self._vault,
                 ask_code=lambda domain, timeout: operation.ask("secret", timeout, kind="code", domain=domain),
                 on_secret=lambda value: self._journal.add_secret(journal_id, value),
                 on_step=on_step, code_seconds=self.settings.code_seconds, cancel=operation.cancel, usage=self._usage,
-                account=str(args.get("account") or ""),
+                account=str(args.get("account") or ""), **options,
             )
             if result["status"] == "ok":
                 self._journal.session_opened(result["domain"])

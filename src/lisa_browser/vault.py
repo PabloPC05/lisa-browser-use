@@ -6,10 +6,11 @@ página. Nunca van en argumentos de programas ni en mensajes de error.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol, Sequence
 from urllib.parse import urlparse
@@ -58,6 +59,9 @@ class Vault(Protocol):
     def totp(self, entry: Entry) -> str:
         """Código temporal de la entrada, si tiene generador."""
 
+    def set_password(self, entry: Entry, password: str) -> None:
+        """Guarda `password` como contraseña de la entrada."""
+
 
 class FakeVault:
     """Baúl en memoria para pruebas."""
@@ -80,6 +84,11 @@ class FakeVault:
     def totp(self, entry: Entry) -> str:
         self.totp_calls += 1
         return self.codes[entry.id]
+
+    def set_password(self, entry: Entry, password: str) -> None:
+        if self.broken:
+            raise VaultUnavailable("baúl de pruebas no disponible")
+        self.entries = [replace(e, password=password) if e.id == entry.id else e for e in self.entries]
 
 
 class BitwardenCliVault:
@@ -109,6 +118,17 @@ class BitwardenCliVault:
     def totp(self, entry: Entry) -> str:
         return self._run("get", "totp", entry.id).strip()
 
+    def set_password(self, entry: Entry, password: str) -> None:
+        try:
+            item = json.loads(self._run("get", "item", entry.id))
+        except ValueError as exc:
+            raise VaultUnavailable("bw devolvió una respuesta que no es JSON") from exc
+        if item.get("type") != 1 or not isinstance(item.get("login"), dict):
+            raise VaultUnavailable("la entrada del baúl no es un inicio de sesión")
+        item["login"]["password"] = password
+        # La entrada cifrada en base64 entra por la entrada estándar, no como argumento.
+        self._run("edit", "item", entry.id, stdin=base64.b64encode(json.dumps(item).encode()).decode())
+
     def _items(self, flag: str, value: str) -> list[Entry]:
         try:
             raw = json.loads(self._run("list", "items", flag, value))
@@ -129,10 +149,10 @@ class BitwardenCliVault:
             ))
         return entries
 
-    def _run(self, *args: str) -> str:
+    def _run(self, *args: str, stdin: str | None = None) -> str:
         if self._session is None:
             self._open()
-        return self._bw_call(*args, env={"BW_SESSION": self._session or ""})
+        return self._bw_call(*args, env={"BW_SESSION": self._session or ""}, stdin=stdin)
 
     def _open(self) -> None:
         status = json.loads(self._bw_call("status")).get("status")
@@ -144,7 +164,7 @@ class BitwardenCliVault:
             raise VaultUnavailable("bw no devolvió una sesión al abrir el baúl")
         self._bw_call("sync", env={"BW_SESSION": self._session})
 
-    def _bw_call(self, *args: str, env: dict[str, str] | None = None) -> str:
+    def _bw_call(self, *args: str, env: dict[str, str] | None = None, stdin: str | None = None) -> str:
         environment = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": self._data_dir,
@@ -154,7 +174,7 @@ class BitwardenCliVault:
         try:
             done = subprocess.run(
                 [self._bw, *args, "--nointeraction"], env=environment, capture_output=True, text=True,
-                timeout=self._timeout_s,
+                timeout=self._timeout_s, input=stdin,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise VaultUnavailable(f"no se pudo ejecutar bw {args[0]} ({type(exc).__name__})") from exc

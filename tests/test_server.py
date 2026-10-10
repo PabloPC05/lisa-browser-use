@@ -300,6 +300,21 @@ class Logins(ServerCase):
         self.assertEqual(self.done(await self.op("logout", {"domain": "socios.test"}))["closed"], ["socios.test"])
         self.assertEqual(self.done(await self.op("sessions"))["sessions"], [])
 
+    async def test_save_password_asks_pablo_tries_it_and_updates_the_vault(self) -> None:
+        vault = self.executor._vault
+        vault.entries[:] = [Entry("e1", "Biblioteca Socios", USER, "caducada-000", ("http://socios.test/login",))]
+        await self.open("/login", "socios.test")
+        self.steps("c1", *TYPE_AND_ENTER, ("SUBTASK_COMPLETE",))
+        events = await self.op("save_password", answers=[PASSWORD])
+        secret = next(e for e in events if e["type"] == "secret")
+        self.assertEqual((secret["kind"], secret["domain"], secret["username"]), ("password", "socios.test", USER))
+        self.assertEqual((self.done(events)["status"], self.done(events)["saved"]), ("ok", True))
+        self.assertEqual(vault.entries[0].password, PASSWORD)
+        self.assertNotIn(PASSWORD, json.dumps(events))
+        self.assertNotIn(PASSWORD, self.dump())
+        self.assertEqual([s["domain"] for s in self.done(await self.op("sessions"))["sessions"]], ["socios.test"])
+        await self.op("logout", {"domain": "socios.test"})
+
     async def test_unanswered_code_ends_the_login(self) -> None:
         self.executor.settings = Settings(token=TOKEN, code_seconds=0.3)
         await self.open("/login-codigo", "socios.test")

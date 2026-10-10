@@ -25,6 +25,8 @@ _HAS_CODE_JS = "[...document.querySelectorAll('input[autocomplete=one-time-code]
 
 # ask_code(domain, timeout_seconds) -> código, o None si Pablo no contesta a tiempo.
 AskCode = Callable[[str, float], str | None]
+# ask_password(domain, username, timeout_seconds) -> contraseña nueva, o None si Pablo no contesta a tiempo.
+AskPassword = Callable[[str, str, float], str | None]
 
 
 class _SecondAttempt(Exception):
@@ -72,14 +74,63 @@ def login(
     para el sitio: no se escribe nada hasta que `account` (parte del usuario o del nombre
     de la entrada) señala una sola.
     """
+    entry, domain, early = _entry_for(browser, vault, account)
+    if entry is None:
+        return early
+    return _sign_in(
+        browser, policy, vault, entry, entry.password, domain, ask_code=ask_code, on_secret=on_secret,
+        on_step=on_step, limits=limits, code_seconds=code_seconds, **options,
+    )
+
+
+def save_password(
+    browser: Browser,
+    policy: Any,
+    vault: Vault,
+    *,
+    ask_password: AskPassword,
+    ask_code: AskCode,
+    on_secret: Callable[[str], None] | None = None,
+    on_step: Callable[[dict], None] | None = None,
+    limits: Limits = Limits(max_actions=12),
+    code_seconds: float = CODE_SECONDS,
+    account: str = "",
+    **options: Any,
+) -> dict[str, Any]:
+    """Prueba una contraseña nueva que da Pablo y, solo si entra, la guarda en su entrada del baúl.
+
+    Devuelve lo mismo que `login` y, con `status: ok`, `saved` (y `reason` si no se pudo guardar).
+    La entrada tiene que existir ya: aquí no se crean cuentas ni se cambian direcciones.
+    """
+    entry, domain, early = _entry_for(browser, vault, account)
+    if entry is None:
+        return early
+    password = ask_password(domain, entry.username, code_seconds)
+    if not password:
+        return {"status": "rejected", "domain": domain, "reason": "password_timeout"}
+    result = _sign_in(
+        browser, policy, vault, entry, password, domain, ask_code=ask_code, on_secret=on_secret,
+        on_step=on_step, limits=limits, code_seconds=code_seconds, **options,
+    )
+    if result["status"] != "ok":
+        return result
+    try:
+        vault.set_password(entry, password)
+    except VaultUnavailable as exc:
+        return {**result, "saved": False, "reason": str(exc)}
+    return {**result, "saved": True}
+
+
+def _entry_for(browser: Browser, vault: Vault, account: str) -> tuple[Entry | None, str, dict[str, Any]]:
+    """La entrada del baúl para la página abierta, o el resultado que explica por qué no hay una sola."""
     url = browser._eval("location.href") or ""
     domain = registrable_domain(url)
     try:
         entries = [e for e in vault.find(url) if e.matches(url)]
         if not entries:
-            return _without_entry(browser, vault, url, domain)
+            return None, domain, _without_entry(browser, vault, url, domain)
     except VaultUnavailable as exc:
-        return {"status": "vault_unavailable", "domain": domain, "reason": str(exc)}
+        return None, domain, {"status": "vault_unavailable", "domain": domain, "reason": str(exc)}
 
     wanted = account.strip().lower()
     if wanted:
@@ -88,20 +139,27 @@ def login(
         entries = exact or named or entries
     if len(entries) > 1:
         # Solo hay un intento de contraseña: no se adivina la cuenta.
-        return {
+        return None, domain, {
             "status": "choose_account", "domain": domain,
             "accounts": [{"name": e.name, "username": e.username} for e in entries],
         }
-    entry = entries[0]
+    return entries[0], domain, {}
+
+
+def _sign_in(
+    browser: Browser, policy: Any, vault: Vault, entry: Entry, password: str, domain: str, *,
+    ask_code: AskCode, on_secret: Callable[[str], None] | None, on_step: Callable[[dict], None] | None,
+    limits: Limits, code_seconds: float, **options: Any,
+) -> dict[str, Any]:
     if on_secret is not None:
-        on_secret(entry.password)
-    backend = _TypeOnce(browser.backend, entry.password)
+        on_secret(password)
+    backend = _TypeOnce(browser.backend, password)
     result = run_subtask(
         backend, policy,
         {
             "goal": "Iniciar sesión con el usuario y la contraseña dados.",
             "verification": ["La sesión está iniciada: la página ya no pide la contraseña."],
-            "inputs": {"usuario": entry.username, "contraseña": entry.password},
+            "inputs": {"usuario": entry.username, "contraseña": password},
             "secret_inputs": ["usuario", "contraseña"],
             "constraints": ["Escribe la contraseña una sola vez.", "No pulses enlaces de recuperar contraseña."],
         },
