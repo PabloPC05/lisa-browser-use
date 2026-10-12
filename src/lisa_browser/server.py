@@ -381,8 +381,13 @@ class Executor:
         assert self._files is not None
         found = []
         # Un PDF que se quedó abierto en el visor se baja aquí, para que llegue como cualquier descarga.
+        pdf_name = self._files.shown_pdf_name()
         showing_pdf = self._files.save_shown_pdf()
         for item in self._files.collect(wait_s=3.0 if showing_pdf else 0.5):
+            # Si el sitio manda el nombre del archivo con tildes, el Chromium del contenedor no sabe
+            # escribirlo y lo guarda como «download». Se entrega con el nombre que sale de su dirección.
+            if pdf_name and "." not in item["name"]:
+                item = {**item, "name": pdf_name}
             download_id = "d_" + uuid.uuid4().hex[:12]
             self._downloads[download_id] = item
             operation.emit("download", id=download_id, name=item["name"], bytes=item["bytes"])

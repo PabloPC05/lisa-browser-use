@@ -116,6 +116,15 @@ class PdfInTheViewer(FilesCase):
         self.assertEqual([d["name"] for d in found], ["Presentacion_SO1.pdf"])
 
 
+class ReadableName(unittest.TestCase):
+    def test_the_name_comes_from_the_address_without_accents_or_odd_characters(self) -> None:
+        from lisa_browser.files import readable_name
+
+        self.assertEqual(readable_name("https://cv.usc.es/pluginfile.php/3/mod_resource/content/47/Presentaci%C3%B3n_SO1.pdf"), "Presentacion_SO1.pdf")
+        self.assertEqual(readable_name("https://a.test/docs/Gu%C3%ADa%20docente%20(2026).pdf?x=1#p2"), "Guia docente _2026_.pdf")
+        self.assertEqual(readable_name("https://a.test/"), "")
+
+
 class Upload(FilesCase):
     def test_file_is_attached_to_the_named_field_and_sent(self) -> None:
         self.browser.open(self.site.url("/anuncio"))
