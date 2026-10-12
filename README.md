@@ -86,13 +86,22 @@ La biblioteca está en `/var/lib/lisa-browser/biblioteca.sqlite`, junto al regis
 
 «Descarga del campus virtual el PDF del enunciado de la práctica 2 de Sistemas Operativos I», con Claude Sonnet 5.5 como planificador (12-10-2026):
 
-| Lo que hay guardado | Llamadas del planificador | Tiempo | Tokens | Resultado |
-|---|---|---|---|---|
-| Nada | 20 | 242 s | 341.000 | No llegó a encontrar el campus |
-| El sitio | 15 | 73 s | 260.000 | PDF entregado (y antes, uno equivocado) |
-| El sitio y la rutina | 1 | 14 s | 26.000 | PDF entregado |
+| Lo que hay guardado | Cómo se siguen los enlaces | Llamadas del planificador | Pasos de JEV | Tiempo | Tokens del planificador | Resultado |
+|---|---|---|---|---|---|---|
+| Nada | JEV | 20 | 0 | 242 s | 341.000 | No llegó a encontrar el campus |
+| El sitio | JEV | 15 | 10 | 73 s | 260.000 | PDF entregado (y antes, uno equivocado) |
+| El sitio | `follow` | 5 | 0 | 19 s | 74.000 | PDF entregado |
+| El sitio y la rutina | JEV | 1 | 5 | 14 s | 26.000 | PDF entregado |
+| El sitio y la rutina | `follow` | 1 | 0 | 6–11 s | 27.000 | PDF entregado |
 
-Una pasada por fila, salvo la última, que son dos. En una tercera pasada la rutina falló por un error del navegador justo después de reiniciar el servicio; el planificador terminó a mano desde donde quedó (3 llamadas, 19 s, 56.000 tokens).
+Son pocas pasadas (una o dos por fila; la última, tres). La fila de `follow` sin rutina es otro documento del mismo curso, pedido paso a paso. Lo que gasta JEV es aparte y casi no cuenta: 59.000 tokens suyos en la segunda fila son 0,0025 $.
+
+Casi todos los tokens del planificador son relectura de lo ya enviado, que el proveedor cobra a una décima parte: ponderados por precio, la segunda fila son unos 50.000 y la última unos 4.300. El suelo actual son dos llamadas (decidir y contestar) con unos 13.500 tokens fijos cada una, entre instrucciones, índice de memoria y herramientas.
+
+Lo que enseñó esta gestión:
+
+- La rutina que guardó el planificador usaba un paso de JEV para pulsar el enlace, y JEV pulsó a veces el de otra práctica. Con `follow` no hay nada que decidir: o existe un enlace con ese nombre o la rutina se detiene y lo dice (así terminó la petición de una práctica 3 que todavía no existe).
+- En una pasada la rutina falló por un error del navegador justo después de reiniciar el servicio; el planificador terminó a mano desde donde quedó (3 llamadas, 19 s).
 
 ## Origen
 
