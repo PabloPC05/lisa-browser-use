@@ -95,6 +95,14 @@ class PdfInTheViewer(FilesCase):
         # Mientras siga en pantalla no se vuelve a bajar.
         self.assertFalse(self.files.save_shown_pdf())
         self.assertEqual(self.files.collect(wait_s=0.5), [])
+        # Pedirlo otra vez es abrirlo otra vez, y entonces sí se baja de nuevo (con otro nombre de archivo).
+        self.browser.open(self.site.url("/practicas"))
+        self.browser.open(self.site.url("/enunciado.pdf"))
+        again = self.files.collect(wait_s=0.5)
+        if not again:
+            self.assertTrue(self.files.save_shown_pdf())
+            again = self.files.collect(wait_s=3.0)
+        self.assertEqual([d["bytes"] for d in again], [len(PDF)])
 
 
 class Upload(FilesCase):

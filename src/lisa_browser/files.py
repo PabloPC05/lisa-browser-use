@@ -30,10 +30,20 @@ def _plain(text: str) -> str:
 # Un PDF abierto en el visor del navegador no llega como descarga ni se puede leer como texto.
 # Un enlace con `download` hacia la misma dirección lo baja con la sesión de la página.
 _SAVE_PDF_JS = (
-    "(() => { if (document.contentType !== 'application/pdf') return false;"
+    "(() => { if (document.contentType !== 'application/pdf' || window.__lisaPdfSaved) return false;"
+    " window.__lisaPdfSaved = true;"
     " const a = document.createElement('a'); a.href = location.href; a.download = '';"
     " (document.body || document.documentElement).appendChild(a); a.click(); a.remove(); return true; })()"
 )
+
+
+def _signature(path: Path) -> tuple[int, int]:
+    """Fecha y tamaño de un archivo; (0, 0) si desaparece mientras se mira."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return (0, 0)
+    return (stat.st_mtime_ns, stat.st_size)
 
 
 class Files:
@@ -46,8 +56,8 @@ class Files:
         self.uploads_dir = Path(uploads_dir)
         # En el contenedor, Chromium ve estas carpetas en otra ruta.
         self._uploads_in_browser = Path(uploads_dir_in_browser or uploads_dir)
-        self._seen = {p.name for p in self.downloads_dir.iterdir()} if self.downloads_dir.exists() else set()
-        self._saved_pdf = ""
+        # Nombre -> (fecha, tamaño): bajar otra vez un archivo con el mismo nombre lo sobrescribe, y cuenta como nuevo.
+        self._seen = {p.name: _signature(p) for p in self.downloads_dir.iterdir()} if self.downloads_dir.exists() else {}
         self._browser.backend._conn.call("Browser.setDownloadBehavior", {
             "behavior": "allow", "downloadPath": str(downloads_dir_in_browser or downloads_dir),
         })
@@ -57,18 +67,16 @@ class Files:
     def save_shown_pdf(self) -> bool:
         """Si la página es un PDF abierto en el visor, lo descarga. Devuelve si había que hacerlo.
 
-        Cada PDF se baja una sola vez mientras siga en pantalla: las operaciones siguientes
-        sobre la misma página no lo repiten.
+        La marca de «ya bajado» va en el propio documento: mientras siga en pantalla no se repite,
+        y volver a abrir la misma dirección (otra petición, otra ejecución de una rutina) lo baja de nuevo.
         """
         try:
-            url = self._browser._eval("document.contentType === 'application/pdf' ? location.href : ''") or ""
-            if not url:
-                self._saved_pdf = ""
-                return False
-            if url == self._saved_pdf:
-                return False
-            self._saved_pdf = url
-            return bool(self._browser._eval(_SAVE_PDF_JS))
+            # Con `userGesture`: sin él, Chromium solo deja a una página una descarga automática y
+            # bloquea las siguientes, que es justo lo que pasa al pedir el mismo PDF otro día.
+            result = self._browser._call(
+                "Runtime.evaluate", {"expression": _SAVE_PDF_JS, "returnByValue": True, "userGesture": True}
+            )
+            return bool(result.get("result", {}).get("value"))
         except Exception:
             return False
 
@@ -99,15 +107,15 @@ class Files:
         deadline = time.monotonic() + timeout_s
         quiet_until = time.monotonic() + wait_s
         while True:
-            names = {p.name for p in self.downloads_dir.iterdir()}
-            partial = [n for n in names if n.endswith(_PARTIAL)]
-            fresh = sorted(n for n in names - self._seen if not n.endswith(_PARTIAL))
+            found = {p.name: _signature(p) for p in self.downloads_dir.iterdir()}
+            partial = [n for n in found if n.endswith(_PARTIAL)]
+            fresh = sorted(n for n, mark in found.items() if not n.endswith(_PARTIAL) and self._seen.get(n) != mark)
             if not partial and (fresh or time.monotonic() >= quiet_until):
                 break
             if time.monotonic() >= deadline:
                 break
             sleep(0.1)
-        self._seen |= set(fresh)
+        self._seen.update({n: found[n] for n in fresh})
         return [
             {"name": n, "path": str(self.downloads_dir / n), "bytes": (self.downloads_dir / n).stat().st_size}
             for n in fresh
