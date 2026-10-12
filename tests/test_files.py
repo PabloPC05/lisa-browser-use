@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -76,6 +77,10 @@ class Upload(FilesCase):
         self.assertEqual((attached["status"], attached["file"]), ("ok", "bici.png"))
         self.browser._eval("document.querySelector('#f').submit()")
         self.browser.backend._wait_loaded()
+        # El envío del formulario puede llegar al servidor un instante después de que la página diga que cargó.
+        deadline = time.monotonic() + 5
+        while not self.site.posts("/subido") and time.monotonic() < deadline:
+            time.sleep(0.05)
         [body] = self.site.posts("/subido")
         self.assertIn(PHOTO, body)
         self.assertIn(b'name="foto"; filename="bici.png"', body)
