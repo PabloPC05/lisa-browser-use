@@ -32,7 +32,9 @@ def _plain(text: str) -> str:
 _SAVE_PDF_JS = (
     "(() => { if (document.contentType !== 'application/pdf' || window.__lisaPdfSaved) return false;"
     " window.__lisaPdfSaved = true;"
-    " const a = document.createElement('a'); a.href = location.href; a.download = '';"
+    " let name = ''; try { name = decodeURIComponent(location.pathname.split('/').pop() || ''); } catch (e) {}"
+    # Con un nombre vacío, Chromium llama «download» al archivo si la dirección lleva tildes codificadas.
+    " const a = document.createElement('a'); a.href = location.href; a.download = name || 'documento.pdf';"
     " (document.body || document.documentElement).appendChild(a); a.click(); a.remove(); return true; })()"
 )
 

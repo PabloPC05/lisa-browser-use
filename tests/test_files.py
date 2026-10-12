@@ -25,6 +25,7 @@ FILE_PAGES = {
     ),
     # Sin Content-Disposition: el navegador lo abre en su visor en vez de descargarlo.
     "/enunciado.pdf": ("application/pdf", PDF, {}),
+    "/Presentaci%C3%B3n_SO1.pdf": ("application/pdf", PDF, {}),
     "/practicas": page("Prácticas", "<h1>Prácticas</h1><p><a href='/enunciado.pdf'>Práctica 2</a></p>"),
     "/anuncio": page(
         "Nuevo anuncio",
@@ -103,6 +104,15 @@ class PdfInTheViewer(FilesCase):
             self.assertTrue(self.files.save_shown_pdf())
             again = self.files.collect(wait_s=3.0)
         self.assertEqual([d["bytes"] for d in again], [len(PDF)])
+
+
+    def test_a_pdf_with_accents_in_its_address_keeps_its_name(self) -> None:
+        self.browser.open(self.site.url("/Presentaci%C3%B3n_SO1.pdf"))
+        found = self.files.collect(wait_s=0.5)
+        if not found:
+            self.assertTrue(self.files.save_shown_pdf())
+            found = self.files.collect(wait_s=3.0)
+        self.assertEqual([d["name"] for d in found], ["Presentación_SO1.pdf"])
 
 
 class Upload(FilesCase):
