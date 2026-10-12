@@ -31,6 +31,8 @@ code_seconds = 330
 
 [paths]
 journal = "/var/lib/lisa-browser/registro.sqlite"
+# Sitios habituales y rutinas. Si no se indica, `biblioteca.sqlite` junto al registro.
+# library = "/var/lib/lisa-browser/biblioteca.sqlite"
 downloads = "/var/lib/lisa-navegador/descargas"
 uploads = "/var/lib/lisa-navegador/subidas"
 # Cómo ve Chromium esas mismas carpetas dentro del contenedor.

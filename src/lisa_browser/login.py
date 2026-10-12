@@ -20,7 +20,7 @@ CODE_SECONDS = 300
 CODE_ATTEMPTS = 2
 
 _CODE_FIELD = re.compile(r"c[oó]digo|code|otp|verificaci[oó]n|sms|token|2fa|autenticaci[oó]n|clave temporal", re.I)
-_HAS_PASSWORD_JS = "[...document.querySelectorAll('input[type=password]')].some((e) => e.offsetParent !== null)"
+HAS_PASSWORD_JS = "[...document.querySelectorAll('input[type=password]')].some((e) => e.offsetParent !== null)"
 _HAS_CODE_JS = "[...document.querySelectorAll('input[autocomplete=one-time-code]')].some((e) => e.offsetParent !== null)"
 
 # ask_code(domain, timeout_seconds) -> código, o None si Pablo no contesta a tiempo.
@@ -115,14 +115,14 @@ def login(
             browser, policy, vault, entry, domain, ask_code=ask_code, on_secret=on_secret, on_step=on_step,
             limits=limits, code_seconds=code_seconds, **options,
         )
-    if backend.typed and not browser._eval(_HAS_PASSWORD_JS):
+    if backend.typed and not browser._eval(HAS_PASSWORD_JS):
         return {"status": "ok", "domain": domain}
     return {"status": "rejected", "domain": domain, "reason": "password"}
 
 
 def _without_entry(browser: Browser, vault: Vault, url: str, domain: str) -> dict[str, Any]:
     """Sin contraseña para este dominio. Si la página se parece a un sitio guardado, avisa del posible engaño."""
-    if browser._eval(_HAS_PASSWORD_JS):
+    if browser._eval(HAS_PASSWORD_JS):
         title = (browser._eval("document.title") or "").lower()
         # Palabras del nombre de la página, sin la terminación (.com, .test…), que comparten sitios sin relación.
         host_labels = (urlparse(url).hostname or "").lower().split(".")[:-1]
