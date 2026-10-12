@@ -483,8 +483,9 @@ def make_app(executor: Executor) -> web.Application:
                 return web.json_response({"error": "invalid_request"}, status=400)
         return wrapped
 
-    async def library_list(_: web.Request, library: Library) -> dict:
-        return library.listing()
+    async def library_list(request: web.Request, library: Library) -> dict:
+        limit = request.query.get("limit")
+        return library.listing(request.query.get("q", ""), int(limit) if limit else None)
 
     async def site_put(request: web.Request, library: Library) -> dict:
         body = await request.json()

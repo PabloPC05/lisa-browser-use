@@ -343,3 +343,14 @@ En la primera gestión real, casi todo lo que el planificador encargó a JEV fue
 
 Los enlaces sin dirección web (`javascript:`, menús que despliegan) no entran: para esos sigue estando `task`.
 
+## 14. Una biblioteca que puede crecer (12-10-2026)
+
+Guardar una rutina no cuesta disco (unos 500 bytes), pero cada una que el planificador lleva en sus instrucciones se paga en todas sus llamadas (unos 50 tokens), y con muchas parecidas elige peor. Es el mismo problema que tener demasiadas herramientas.
+
+`GET /v1/library` acepta dos parámetros:
+
+- `limit`: devuelve solo lo más usado, hasta ese número de sitios y de rutinas, y en `more` cuánto queda fuera. Es una lista **estable**: no depende de lo que se pregunte, así que lo que el planificador lleva en cada mensaje sigue valiendo en la caché de su proveedor. Reordenarla por relevancia en cada mensaje invalidaría esa caché y saldría más caro que llevar la lista entera.
+- `q`: la petición del usuario. Añade en `matches` lo guardado que encaja con ella y no estaba ya en la lista (hasta 5 sitios y 5 rutinas). El planificador lo recibe junto al mensaje, no en sus instrucciones. Se puntúa por palabras, sin tildes: pesa más el nombre y los alias que la descripción. Con unos cientos de entradas no hace falta nada más; si algún día no basta, aquí iría una búsqueda semántica.
+
+Una rutina que falla tres veces seguidas queda **dormida**: deja de salir en la lista, pero sigue guardada, se encuentra si encaja y se despierta en cuanto vuelve a salir bien.
+
