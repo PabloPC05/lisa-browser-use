@@ -67,6 +67,7 @@ class Store(unittest.TestCase):
         self.assertEqual(params_of(clean), ["asignatura"])
         for bad in (
             [], "abrir", [{"op": "logout"}], [{"op": "attach", "file": "x"}], [{"op": "open", "url": "cv.usc.es"}],
+            [{"op": "follow"}],
             [{"op": "task", "goal": "Sin comprobación"}], [{"op": "task", "goal": "x", "verification": "no es lista"}],
             [{"op": "open", "url": "https://a.test"}] * 21,
         ):
@@ -250,6 +251,30 @@ class Routines(LibraryCase):
         allowed = await self.op("routine", {"name": "Saludar", "params": {"mensaje": "Hola"}}, conversation="c2", answers=["once"])
         self.assertEqual(self.done(allowed)["status"], "ok")
         self.assertEqual(len(self.site.posts("/enviado")), 1)
+
+    async def test_a_routine_can_follow_links_by_name_without_the_decision_model(self) -> None:
+        self.library.save_routine("Horario", "A qué hora abre.", self.routine(
+            {"op": "open", "url": "/"}, {"op": "follow", "text": "{enlace}", "find": "abre"},
+        ))
+        self.policies["c1"] = ByName([])  # si se pidiera una decisión, fallaría
+        events = await self.op("routine", {"name": "Horario", "params": {"enlace": "horarios"}})
+        result = self.done(events)
+        self.assertEqual((result["status"], result["url"], self.policies["c1"].calls), ("ok", self.site.url("/horarios"), 0))
+        self.assertIn("9:00 a 21:00", result["text"])
+        self.assertEqual([e["action"] for e in events if e["type"] == "step"], ["rutina 1/2: open", "rutina 2/2: follow"])
+
+        gone = self.done(await self.op("routine", {"name": "Horario", "params": {"enlace": "piscina"}}))
+        self.assertEqual((gone["status"], gone["failed_step"], gone["result"]["error"]), ("ROUTINE_FAILED", 2, "no_link"))
+
+    async def test_follow_and_links_as_operations(self) -> None:
+        opened = self.done(await self.op("open", {"url": self.site.url("/"), "read_chars": 0, "links": True}))
+        self.assertEqual(
+            opened["links"], [{"text": "Horarios", "url": self.site.url("/horarios")}, {"text": "Zona de socios", "url": self.site.url("/login")}],
+        )
+        self.assertEqual(self.done(await self.op("read", {"find": "socios", "links": True}))["links"], [{"text": "Zona de socios", "url": self.site.url("/login")}])
+        followed = self.done(await self.op("follow", {"text": "Horarios", "find": "abre"}))
+        self.assertEqual((followed["ok"], followed["followed"], followed["matches"]), (True, "Horarios", 1))
+        self.assertFalse(self.done(await self.op("follow", {"text": "Piscina"}))["ok"])
 
     async def test_unknown_routine_lists_the_known_ones(self) -> None:
         self.library.save_routine("Horario", "A qué hora abre.", HORARIOS)

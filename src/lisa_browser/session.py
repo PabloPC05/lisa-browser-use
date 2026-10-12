@@ -22,6 +22,12 @@ from arc_cua.backends.chrome import ChromeBackend
 log = logging.getLogger(__name__)
 
 _READ_JS = "document.body ? document.body.innerText : ''"
+# Enlaces que se ven, con su texto en una línea. Solo los que llevan a una dirección web.
+_LINKS_JS = (
+    "[...document.querySelectorAll('a[href]')].filter((a) => a.getClientRects().length > 0)"
+    ".map((a) => ({ text: (a.innerText || a.getAttribute('aria-label') || a.title || '').replace(/\\s+/g, ' ').trim(),"
+    " url: a.href })).filter((l) => l.text && /^https?:/.test(l.url))"
+)
 _STATUS_JS = (
     "(() => { const n = performance.getEntriesByType('navigation')[0];"
     " return n && typeof n.responseStatus === 'number' ? n.responseStatus : 0; })()"
@@ -236,6 +242,54 @@ class Browser:
             "title": self._eval("document.title") or "",
             **excerpt(self._eval(_READ_JS) or "", max_chars=max_chars, find=find, offset=offset),
         }
+
+    def links(self, find: str = "", limit: int = 15) -> list[dict[str, str]]:
+        """Enlaces visibles de la página con su dirección. Con `find`, los que contienen alguno de sus términos.
+
+        Con la dirección en la mano, el planificador abre el enlace él mismo: no hace falta
+        que un modelo lo busque en la pantalla y lo pulse.
+        """
+        terms = [_plain(term.strip()) for term in find.split(",") if term.strip()]
+        seen: set[tuple[str, str]] = set()
+        out: list[dict[str, str]] = []
+        for link in self._eval(_LINKS_JS) or []:
+            key = (link["text"], link["url"])
+            if key in seen or (terms and not any(term in _plain(link["text"]) for term in terms)):
+                continue
+            seen.add(key)
+            out.append({"text": link["text"][:120], "url": link["url"]})
+        return out[:limit]
+
+    def follow(self, text: str) -> dict[str, Any]:
+        """Abre el enlace de la página que se llama `text`. No decide ningún modelo.
+
+        Gana el enlace cuyo texto es exactamente ese; si no hay, el que empieza así; si no, el
+        que lo contiene. Si en el mejor de esos grupos hay enlaces a sitios distintos no se
+        elige: se devuelven para que el planificador abra el que quiere por su dirección.
+        """
+        wanted = _plain(" ".join(text.split()))
+        if not wanted:
+            return {"ok": False, "error": "no_link", "detail": "falta el texto del enlace"}
+        groups: dict[int, list[dict[str, str]]] = {0: [], 1: [], 2: []}
+        for link in self.links(limit=1000):
+            plain = _plain(link["text"])
+            if plain == wanted:
+                groups[0].append(link)
+            elif plain.startswith(wanted):
+                groups[1].append(link)
+            elif wanted in plain:
+                groups[2].append(link)
+        for matches in groups.values():
+            if not matches:
+                continue
+            if len({link["url"].split("#")[0] for link in matches}) == 1:
+                return {**self.open(matches[0]["url"]), "followed": matches[0]["text"]}
+            return {
+                "ok": False, "error": "ambiguous_link",
+                "detail": "varios enlaces encajan: abre uno por su dirección o da su texto completo",
+                "links": matches[:8],
+            }
+        return {"ok": False, "error": "no_link", "detail": "ningún enlace visible tiene ese texto"}
 
     def screenshot(self) -> bytes:
         """PNG de lo que se ve, con los campos de contraseña y de código en blanco. Es para Pablo, no para los modelos."""
