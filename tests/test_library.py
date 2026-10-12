@@ -97,12 +97,82 @@ class Store(unittest.TestCase):
         self.assertEqual(
             self.library.routines(),
             [{"name": "Horario de la biblioteca", "description": "Dice a qué hora abre la biblioteca.", "params": [], "steps": 3,
-              "runs": 2, "ok": 1, "last_status": "NEEDS_AGENT"}],
+              "runs": 2, "ok": 1, "last_status": "NEEDS_AGENT", "dormant": False}],
         )
         self.assertEqual(self.library.routine("horario de la biblioteca")["steps"], HORARIOS)
         self.assertIsNone(self.library.routine("otra"))
         self.assertTrue(self.library.delete_routine("Horario de la biblioteca"))
         self.assertEqual(self.library.listing(), {"sites": [], "routines": []})
+
+
+class Ranking(unittest.TestCase):
+    """Con muchas cosas guardadas, el planificador lleva pocas y encuentra el resto por lo que se le pide."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.library = Library(Path(self._tmp.name) / "biblioteca.sqlite")
+        for n in range(1, 9):
+            self.library.save_routine(f"Gestión {n}", f"Hace la gestión número {n} en la sede.", HORARIOS)
+            for _ in range(n):
+                self.library.ran(f"Gestión {n}", True, "ok")
+        self.library.save_routine("Notas del campus", "Dice las notas de una asignatura en el campus virtual.", HORARIOS)
+        self.library.save_routine("Factura de la luz", "Descarga la última factura de la compañía eléctrica.", HORARIOS)
+        self.library.save_site("Campus virtual", "https://cv.usc.es/", "Asignaturas en Os meus cursos.", ["cv", "Moodle"])
+        self.library.save_site("Renfe", "https://www.renfe.com/")
+
+    def tearDown(self) -> None:
+        self.library.close()
+        self._tmp.cleanup()
+
+    def test_the_short_list_is_the_most_used_and_says_how_many_are_left(self) -> None:
+        listing = self.library.listing(limit=3)
+        self.assertEqual([r["name"] for r in listing["routines"]], ["Gestión 8", "Gestión 7", "Gestión 6"])
+        self.assertEqual(listing["more"], {"sites": 0, "routines": 7})
+        self.assertNotIn("matches", listing)
+        # La misma petición da siempre la misma lista: no depende de lo que se pregunte.
+        self.assertEqual(self.library.listing("la factura de la luz", limit=3)["routines"], listing["routines"])
+
+    def test_what_fits_the_request_is_found_even_if_it_is_rarely_used(self) -> None:
+        matches = self.library.listing("¿me bajas la FACTURA de la luz de este mes?", limit=3)["matches"]
+        self.assertEqual([r["name"] for r in matches["routines"]], ["Factura de la luz"])
+        notas = self.library.listing("qué notas tengo en el campus", limit=3)["matches"]
+        self.assertEqual([r["name"] for r in notas["routines"]], ["Notas del campus"])
+        # Lo que ya está en la lista corta no se repite, y lo que no encaja no aparece.
+        again = self.library.listing("la gestión de la sede", limit=3)
+        self.assertFalse({r["name"] for r in again["matches"]["routines"]} & {r["name"] for r in again["routines"]})
+        self.assertLessEqual(len(again["matches"]["routines"]), 5)
+        self.assertEqual(self.library.listing("receta de lentejas", limit=3)["matches"], {"sites": [], "routines": []})
+        # Los sitios también se encuentran por sus otros nombres.
+        self.assertEqual([s["name"] for s in self.library.listing("entra en moodle", limit=0)["matches"]["sites"]], ["Campus virtual"])
+
+    def test_a_routine_that_keeps_failing_is_no_longer_shown_but_can_still_be_found(self) -> None:
+        for _ in range(2):
+            self.library.ran("Gestión 8", False, "ROUTINE_FAILED")
+        self.assertIn("Gestión 8", [r["name"] for r in self.library.listing(limit=3)["routines"]])
+        self.library.ran("Gestión 8", False, "ROUTINE_FAILED")
+        listing = self.library.listing("la gestión 8 de la sede", limit=3)
+        self.assertEqual([r["name"] for r in listing["routines"]], ["Gestión 7", "Gestión 6", "Gestión 5"])
+        self.assertEqual([(r["name"], r["dormant"]) for r in listing["matches"]["routines"]][:1], [("Gestión 8", True)])
+        # En cuanto vuelve a salir bien, se enseña otra vez.
+        self.library.ran("Gestión 8", True, "ok")
+        self.assertEqual(self.library.listing(limit=1)["routines"][0]["name"], "Gestión 8")
+
+    def test_an_older_library_gains_the_new_column(self) -> None:
+        path = Path(self._tmp.name) / "antigua.sqlite"
+        import sqlite3
+        old = sqlite3.connect(path)
+        old.executescript(
+            "CREATE TABLE routines (key TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, params TEXT NOT NULL DEFAULT '[]',"
+            " steps TEXT NOT NULL, updated_at TEXT NOT NULL, runs INTEGER NOT NULL DEFAULT 0, ok INTEGER NOT NULL DEFAULT 0,"
+            " last_run TEXT, last_status TEXT);"
+            "INSERT INTO routines (key, name, description, steps, updated_at) VALUES ('vieja', 'Vieja', 'De antes.', '[]', '2026-10-12');"
+        )
+        old.commit()
+        old.close()
+        reopened = Library(path)
+        reopened.ran("Vieja", False, "ROUTINE_FAILED")
+        self.assertEqual([(r["name"], r["runs"], r["dormant"]) for r in reopened.routines()], [("Vieja", 1, False)])
+        reopened.close()
 
 
 class LibraryCase(ServerCase):
@@ -143,7 +213,7 @@ class LibraryOverHttp(LibraryCase):
         listing = await (await self.client.get("/v1/library", headers=AUTH)).json()
         self.assertEqual([(s["name"], s["url"], s["notes"]) for s in listing["sites"]], [("Campus virtual", "https://cv.usc.es/", "Mis cursos, arriba.")])
         # El listado no trae los pasos: es lo que el planificador lleva en cada mensaje.
-        self.assertEqual(listing["routines"], [{"name": "Horario", "description": "A qué hora abre.", "params": [], "steps": 3, "runs": 0, "ok": 0, "last_status": None}])
+        self.assertEqual(listing["routines"], [{"name": "Horario", "description": "A qué hora abre.", "params": [], "steps": 3, "runs": 0, "ok": 0, "last_status": None, "dormant": False}])
         one = await (await self.client.get("/v1/library/routines/horario", headers=AUTH)).json()
         self.assertEqual(one["steps"], HORARIOS)
 

@@ -29,6 +29,8 @@ from .vault import registrable_domain
 ROUTINE_OPS = ("open", "follow", "task", "login", "read")
 MAX_STEPS = 20
 MAX_NOTES = 600
+# Fallos seguidos a partir de los cuales una rutina deja de enseñarse sola: sigue guardada y se puede buscar.
+DORMANT_AFTER = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sites (
@@ -52,7 +54,8 @@ CREATE TABLE IF NOT EXISTS routines (
   runs INTEGER NOT NULL DEFAULT 0,
   ok INTEGER NOT NULL DEFAULT 0,
   last_run TEXT,
-  last_status TEXT
+  last_status TEXT,
+  streak INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -85,6 +88,17 @@ def key_of(name: str) -> str:
     """Los nombres se comparan sin mayúsculas, tildes ni espacios de más."""
     plain = unicodedata.normalize("NFD", " ".join(str(name).split()).casefold())
     return "".join(c for c in plain if not unicodedata.combining(c))
+
+
+def _terms(query: str) -> list[str]:
+    """Palabras de una petición que sirven para buscar: sin tildes y sin las muy cortas."""
+    return [word for word in re.split(r"[^a-z0-9]+", key_of(query)) if len(word) >= 3]
+
+
+def _score(terms: list[str], strong: str, weak: str) -> float:
+    """Cuánto encaja algo guardado con una petición: pesa más el nombre que la descripción."""
+    strong, weak = key_of(strong), key_of(weak)
+    return sum(3.0 if term in strong else 1.0 if term in weak else 0.0 for term in terms)
 
 
 def _name(name: Any) -> str:
@@ -167,6 +181,9 @@ class Library:
         self._db = sqlite3.connect(str(path), check_same_thread=False)
         self._db.execute("PRAGMA journal_mode = WAL")
         self._db.executescript(_SCHEMA)
+        # Bibliotecas creadas antes de contar los fallos seguidos.
+        if "streak" not in {row[1] for row in self._db.execute("PRAGMA table_info(routines)")}:
+            self._db.execute("ALTER TABLE routines ADD COLUMN streak INTEGER NOT NULL DEFAULT 0")
         self._db.commit()
 
     def close(self) -> None:
@@ -245,22 +262,51 @@ class Library:
 
     def routines(self) -> list[dict[str, Any]]:
         rows = self._db.execute(
-            "SELECT name, description, params, steps, runs, ok, last_status FROM routines"
+            "SELECT name, description, params, steps, runs, ok, last_status, streak FROM routines"
             " ORDER BY runs DESC, name COLLATE NOCASE"
         ).fetchall()
         return [
             {"name": n, "description": d, "params": json.loads(p), "steps": len(json.loads(s)), "runs": runs, "ok": ok,
-             "last_status": last}
-            for n, d, p, s, runs, ok, last in rows
+             "last_status": last, "dormant": streak >= DORMANT_AFTER}
+            for n, d, p, s, runs, ok, last, streak in rows
         ]
 
     def ran(self, name: Any, ok: bool, status: str) -> None:
         with self._db:
             self._db.execute(
-                "UPDATE routines SET runs=runs+1, ok=ok+?, last_run=?, last_status=? WHERE key=?",
-                (1 if ok else 0, _now(), status, key_of(str(name))),
+                "UPDATE routines SET runs=runs+1, ok=ok+?, last_run=?, last_status=?,"
+                " streak=CASE WHEN ? THEN 0 ELSE streak+1 END WHERE key=?",
+                (1 if ok else 0, _now(), status, 1 if ok else 0, key_of(str(name))),
             )
 
-    def listing(self) -> dict[str, Any]:
-        """Lo que el planificador ve en cada mensaje: sitios y rutinas, sin los pasos."""
-        return {"sites": self.sites(), "routines": self.routines()}
+    def listing(self, query: str = "", limit: int | None = None) -> dict[str, Any]:
+        """Lo que el planificador ve de la biblioteca, sin los pasos de las rutinas.
+
+        Sin `limit`, todo. Con `limit`, lo más usado (hasta ese número de sitios y de rutinas):
+        es una lista que cambia poco, y así lo que el planificador lleva en cada mensaje no deja
+        de valer en la caché de su proveedor. Lo que no cabe se cuenta en `more`. Con `query`
+        (la petición del usuario) se añade en `matches` lo guardado que encaja con ella y no
+        estaba ya en la lista: es la forma de encontrar una rutina entre cientos sin llevarlas todas.
+
+        Una rutina que ha fallado varias veces seguidas no se enseña sola, pero sí si encaja.
+        """
+        sites, routines = self.sites(), self.routines()
+        awake = [r for r in routines if not r["dormant"]]
+        shown_sites = sites if limit is None else sites[:limit]
+        shown_routines = awake if limit is None else awake[:limit]
+        out: dict[str, Any] = {"sites": shown_sites, "routines": shown_routines}
+        if limit is not None:
+            out["more"] = {"sites": len(sites) - len(shown_sites), "routines": len(routines) - len(shown_routines)}
+        terms = _terms(query)
+        if terms:
+            known = {s["name"] for s in shown_sites} | {r["name"] for r in shown_routines}
+
+            def best(items: list[dict[str, Any]], weak: str) -> list[dict[str, Any]]:
+                scored = [
+                    (_score(terms, item["name"] + " " + " ".join(item.get("aliases", ())), item.get(weak, "")), item)
+                    for item in items if item["name"] not in known
+                ]
+                return [item for score, item in sorted(scored, key=lambda pair: -pair[0]) if score >= 3.0][:5]
+
+            out["matches"] = {"sites": best(sites, "notes"), "routines": best(routines, "description")}
+        return out
