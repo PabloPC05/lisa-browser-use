@@ -72,7 +72,25 @@ nix-shell --run "python -m unittest discover -s tests -t . -v"
 
 Corre en el servidor de Lisa como el servicio `lisa-browser`, junto a un Chromium en un contenedor; lo define `hosts/lisa/navegador.nix` del repositorio [lisa](https://github.com/PabloPC05/lisa). Solo escucha en `127.0.0.1:8787` y cada petición lleva un token.
 
-**Hoy el servicio ejecuta todavía el código de `lisa-project`** (`/srv/lisa/lisa-project/packages/lisa-browser`, rama `browser-use`), que no tiene la biblioteca. Pasarlo a este repositorio es clonar aquí en el servidor y cambiar `codigo` en `navegador.nix`.
+Desde el 12-10-2026 el servicio ejecuta este repositorio, clonado en `/srv/lisa/lisa-browser-use` con una clave de solo lectura (`~/.ssh/github_lisa_browser_use_deploy`). Actualizarlo:
+
+```bash
+git -C /srv/lisa/lisa-browser-use pull && sudo systemctl restart lisa-browser
+```
+
+La biblioteca está en `/var/lib/lisa-browser/biblioteca.sqlite`, junto al registro.
+
+## Medido con una gestión real
+
+«Descarga del campus virtual el PDF del enunciado de la práctica 2 de Sistemas Operativos I», con Claude Sonnet 5.5 como planificador (12-10-2026):
+
+| Lo que hay guardado | Llamadas del planificador | Tiempo | Tokens | Resultado |
+|---|---|---|---|---|
+| Nada | 20 | 242 s | 341.000 | No llegó a encontrar el campus |
+| El sitio | 15 | 73 s | 260.000 | PDF entregado (y antes, uno equivocado) |
+| El sitio y la rutina | 1 | 14 s | 26.000 | PDF entregado |
+
+Una pasada por fila, salvo la última, que son dos. En una tercera pasada la rutina falló por un error del navegador justo después de reiniciar el servicio; el planificador terminó a mano desde donde quedó (3 llamadas, 19 s, 56.000 tokens).
 
 ## Origen
 

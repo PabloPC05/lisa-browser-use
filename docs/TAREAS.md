@@ -180,7 +180,7 @@ Durante el desarrollo no se entra en bancos ni en sitios reales con efecto (deci
 ## Tanda 6
 
 ### T14 — Biblioteca: sitios habituales y rutinas
-- Estado: verificada en pruebas; **sin desplegar**
+- Estado: verificada y desplegada (12-10-2026)
 - Requisitos: R13
 - Depende de: T9
 - Archivos propios: `src/lisa_browser/library.py`, cambios en `server.py`, `login.py` y `__main__.py`, `tests/test_library.py`
@@ -190,7 +190,7 @@ Durante el desarrollo no se entra en bancos ni en sitios reales con efecto (deci
   1. `nix-shell --run "python -m unittest discover -s tests -t ."`
   2. Con el ejecutor real: guardar como rutina una gestión de varios pasos y repetirla con una sola llamada del planificador.
   3. Medir la misma gestión antes y después (turnos del planificador y tokens).
-- Evidencia (12-10-2026): aceptación 1 → `Ran 123 tests in 124.401s — OK` (servidor Lisa, en una carpeta de trabajo aparte del servicio), de ellos 16 nuevos: almacén, API, rutina de varios pasos, datos que faltan, inicio de sesión con el baúl y salto cuando ya hay sesión, paso que falla, aprobación dentro de una rutina. **Pendiente:** aceptaciones 2 y 3, que necesitan desplegar.
+- Evidencia (12-10-2026): aceptación 1 → `Ran 123 tests in 124.401s — OK` (servidor Lisa, en una carpeta de trabajo aparte del servicio), de ellos 16 nuevos: almacén, API, rutina de varios pasos, datos que faltan, inicio de sesión con el baúl y salto cuando ya hay sesión, paso que falla, aprobación dentro de una rutina. Desplegada el 12-10-2026 (repositorio `lisa`, `c02ba63`). Aceptaciones 2 y 3, con Claude Sonnet 5.5 de planificador y la gestión «descargar el enunciado de la práctica 2 de Sistemas Operativos I del campus virtual»: sin nada guardado, 20 llamadas del planificador, 242 s y 341.000 tokens sin llegar al campus; con el sitio guardado, 15 llamadas, 73 s y 260.000 tokens; con la rutina, 1 llamada, 14 s y 26.000 tokens (dos pasadas). La rutina la guardó el propio planificador cuando se le pidió. Esa gestión destapó dos fallos, ya corregidos: un PDF abierto en el visor no llegaba como descarga, y pedirlo por segunda vez tampoco.
 
 ## Aplazado por decisión de Pablo
 
