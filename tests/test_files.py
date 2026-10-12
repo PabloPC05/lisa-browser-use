@@ -23,6 +23,9 @@ FILE_PAGES = {
     "/factura-marzo.pdf": (
         "application/pdf", PDF, {"Content-Disposition": "attachment; filename=\"factura-marzo.pdf\""},
     ),
+    # Sin Content-Disposition: el navegador lo abre en su visor en vez de descargarlo.
+    "/enunciado.pdf": ("application/pdf", PDF, {}),
+    "/practicas": page("Prácticas", "<h1>Prácticas</h1><p><a href='/enunciado.pdf'>Práctica 2</a></p>"),
     "/anuncio": page(
         "Nuevo anuncio",
         "<h1>Nuevo anuncio</h1><form id='f' method='post' action='/subido' enctype='multipart/form-data'>"
@@ -68,6 +71,30 @@ class Download(FilesCase):
         self.assertEqual((download["name"], download["bytes"]), ("factura-marzo.pdf", len(PDF)))
         self.assertEqual(Path(download["path"]).read_bytes(), PDF)
         self.assertEqual(self.files.collect(wait_s=0.2), [])  # no se entrega dos veces
+
+
+class PdfInTheViewer(FilesCase):
+    def test_a_pdf_opened_in_the_viewer_is_downloaded_once(self) -> None:
+        self.browser.open(self.site.url("/practicas"))
+        self.assertFalse(self.files.save_shown_pdf())  # una página normal no se toca
+        # Como en producción, con el idioma fijado. (El error «Another locale override is already in effect»
+        # que se vio allí al abrirse el visor no se reproduce aquí; esto solo cubre el camino normal.)
+        self.browser.present_as_desktop(locale="es-ES", timezone="Europe/Madrid")
+        result = run_subtask(
+            self.browser.backend, ByName([("CLICK", "Práctica 2"), ("SUBTASK_COMPLETE",)]),
+            {"goal": "Abrir la práctica 2", "verification": ["Se abre el PDF"]},
+        )
+        self.assertEqual((result["status"], result["reason"]), ("SUBTASK_COMPLETE", None))
+        already = self.files.collect(wait_s=0.5)
+        if not already:  # el visor lo muestra: hay que bajarlo
+            self.assertTrue(self.files.save_shown_pdf())
+            already = self.files.collect(wait_s=3.0)
+        [download] = already
+        self.assertEqual((download["name"], download["bytes"]), ("enunciado.pdf", len(PDF)))
+        self.assertEqual(Path(download["path"]).read_bytes(), PDF)
+        # Mientras siga en pantalla no se vuelve a bajar.
+        self.assertFalse(self.files.save_shown_pdf())
+        self.assertEqual(self.files.collect(wait_s=0.5), [])
 
 
 class Upload(FilesCase):

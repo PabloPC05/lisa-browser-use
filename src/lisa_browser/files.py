@@ -27,6 +27,15 @@ def _plain(text: str) -> str:
     return "".join(ch for ch in normal if unicodedata.category(ch) != "Mn").lower().strip()
 
 
+# Un PDF abierto en el visor del navegador no llega como descarga ni se puede leer como texto.
+# Un enlace con `download` hacia la misma dirección lo baja con la sesión de la página.
+_SAVE_PDF_JS = (
+    "(() => { if (document.contentType !== 'application/pdf') return false;"
+    " const a = document.createElement('a'); a.href = location.href; a.download = '';"
+    " (document.body || document.documentElement).appendChild(a); a.click(); a.remove(); return true; })()"
+)
+
+
 class Files:
     def __init__(
         self, browser: Browser, downloads_dir: str | Path, uploads_dir: str | Path, *,
@@ -38,9 +47,30 @@ class Files:
         # En el contenedor, Chromium ve estas carpetas en otra ruta.
         self._uploads_in_browser = Path(uploads_dir_in_browser or uploads_dir)
         self._seen = {p.name for p in self.downloads_dir.iterdir()} if self.downloads_dir.exists() else set()
+        self._saved_pdf = ""
         self._browser.backend._conn.call("Browser.setDownloadBehavior", {
             "behavior": "allow", "downloadPath": str(downloads_dir_in_browser or downloads_dir),
         })
+
+    # --- descargas --------------------------------------------------------------
+
+    def save_shown_pdf(self) -> bool:
+        """Si la página es un PDF abierto en el visor, lo descarga. Devuelve si había que hacerlo.
+
+        Cada PDF se baja una sola vez mientras siga en pantalla: las operaciones siguientes
+        sobre la misma página no lo repiten.
+        """
+        try:
+            url = self._browser._eval("document.contentType === 'application/pdf' ? location.href : ''") or ""
+            if not url:
+                self._saved_pdf = ""
+                return False
+            if url == self._saved_pdf:
+                return False
+            self._saved_pdf = url
+            return bool(self._browser._eval(_SAVE_PDF_JS))
+        except Exception:
+            return False
 
     # --- subidas ----------------------------------------------------------------
 

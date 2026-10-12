@@ -191,7 +191,13 @@ class Browser:
                 override["acceptLanguage"] = f"{locale},{locale.split('-')[0]};q=0.9"
             self._call("Emulation.setUserAgentOverride", override)
         if locale:
-            self._call("Emulation.setLocaleOverride", {"locale": locale})
+            try:
+                self._call("Emulation.setLocaleOverride", {"locale": locale})
+            except Exception as exc:
+                # Chromium guarda un solo idioma para todo el navegador: al pasar a otra pestaña
+                # (un enlace que abre una nueva) ya está puesto, y repetirlo es un error.
+                if "already in effect" not in str(exc):
+                    raise
         if timezone:
             self._call("Emulation.setTimezoneOverride", {"timezoneId": timezone})
 
