@@ -27,15 +27,16 @@ from .files import Files
 from .gate import ApprovalRequest, run_gated_subtask
 from .jev import Usage
 from .journal import Journal
-from .login import login
+from .library import Library, LibraryError, MissingParams, substitute
+from .login import HAS_PASSWORD_JS, login
 from .runner import Limits
 from .session import Browser
 from .vault import Vault, registrable_domain
 
 log = logging.getLogger(__name__)
 
-OPS = ("open", "task", "read", "login", "attach", "screenshot", "sessions", "logout", "log")
-_COLLECT_AFTER = ("open", "task", "login")
+OPS = ("open", "task", "read", "login", "attach", "screenshot", "sessions", "logout", "log", "routine")
+_COLLECT_AFTER = ("open", "task", "login", "routine")
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,17 @@ def _brief(page: Any) -> dict[str, Any] | None:
     }
 
 
+def _step_ok(op: str, result: dict[str, Any]) -> bool:
+    """Si un paso de una rutina salió como para seguir con el siguiente."""
+    if op == "open":
+        return bool(result.get("ok"))
+    if op == "task":
+        return result.get("status") == "SUBTASK_COMPLETE"
+    if op == "login":
+        return result.get("status") == "ok"
+    return True
+
+
 def _text_of(read: dict[str, Any]) -> dict[str, Any]:
     return {k: read[k] for k in ("text", "matches", "truncated", "total_chars", "next_offset") if k in read}
 
@@ -120,6 +132,7 @@ class Executor:
         uploads_dir: Path,
         vault: Vault | None = None,
         usage: Usage | None = None,
+        library: Library | None = None,
     ) -> None:
         self.settings = settings
         self._connect = connect
@@ -129,6 +142,7 @@ class Executor:
         self.uploads_dir = Path(uploads_dir)
         self._vault = vault
         self._usage = usage
+        self.library = library
         self._browser: Browser | None = None
         self._files: Files | None = None
         self._lock = threading.Lock()
@@ -154,7 +168,8 @@ class Executor:
             self._lock.release()
 
     def _run_locked(self, operation: Operation) -> dict[str, Any]:
-        goal = operation.args.get("goal") or operation.args.get("url") or operation.args.get("domain")
+        goal = (operation.args.get("goal") or operation.args.get("url") or operation.args.get("domain")
+                or operation.args.get("name"))
         journal_id = self._journal.start(operation.conversation, operation.op, goal)
         used_before = self._usage.copy() if self._usage else Usage()
         started = time.monotonic()
@@ -172,7 +187,10 @@ class Executor:
         sites = []
         if self._browser is not None and operation.op in _COLLECT_AFTER:
             try:
-                sites = [registrable_domain(self._browser._eval("location.href") or "")]
+                url = self._browser._eval("location.href") or ""
+                sites = [registrable_domain(url)]
+                if self.library is not None and result.get("status") not in ("ERROR", "CANCELLED"):
+                    self.library.visited(url)
                 result["downloads"] = self._collect(operation)
             except Exception:
                 log.debug("no se pudo cerrar la operación con la página", exc_info=True)
@@ -183,8 +201,13 @@ class Executor:
         )
         return result
 
-    def _dispatch(self, operation: Operation, journal_id: str) -> dict[str, Any]:
-        op, args = operation.op, operation.args
+    def _dispatch(
+        self, operation: Operation, journal_id: str, op: str | None = None, args: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Hace la operación pedida o, con `op` y `args`, un paso de una rutina."""
+        op, args = (operation.op, operation.args) if op is None else (op, args or {})
+        if op == "routine":
+            return self._run_routine(operation, journal_id)
         if op == "log":
             return {"status": "ok", "operations": self._journal.summary(args.get("since"))}
         browser = self._ensure_browser()
@@ -255,6 +278,65 @@ class Executor:
                 self._journal.session_opened(result["domain"])
             return result
         raise ValueError(f"operación desconocida: {op}")
+
+    def _run_routine(self, operation: Operation, journal_id: str) -> dict[str, Any]:
+        """Hace seguidos los pasos de una rutina guardada. El planificador solo ve el final.
+
+        Cada paso es una operación normal: JEV decide las acciones y la barrera sigue pidiendo
+        permiso para enviar, borrar o pagar. Si un paso no sale, la rutina se detiene ahí y
+        devuelve dónde ha quedado, para que el planificador siga a mano y la corrija.
+        """
+        name = str(operation.args.get("name") or "")
+        if self.library is None:
+            return {"status": "ERROR", "reason": "library_unavailable"}
+        routine = self.library.routine(name)
+        if routine is None:
+            return {"status": "no_routine", "name": name, "routines": [r["name"] for r in self.library.routines()]}
+        try:
+            steps = substitute(routine["steps"], operation.args.get("params") or {})
+        except MissingParams as exc:
+            return {"status": "NEEDS_INPUT", "routine": routine["name"], "missing": exc.missing}
+
+        browser = self._ensure_browser()
+        outputs: list[dict[str, Any]] = []
+        for n, step in enumerate(steps, 1):
+            if operation.cancel.is_set():
+                self.library.ran(name, False, "CANCELLED")
+                return {"status": "CANCELLED", "routine": routine["name"], "stopped_at": n, "of": len(steps)}
+            op = step["op"]
+            label = str(step.get("goal") or step.get("url") or step.get("find") or op)[:80]
+            operation.emit("step", n=n, action=f"rutina {n}/{len(steps)}: {op}", target=label, ms=0)
+            if op == "login" and not browser._eval(HAS_PASSWORD_JS):
+                # La sesión del sitio se conserva entre tareas: si la página no pide contraseña, ya está dentro.
+                continue
+            args = {k: v for k, v in step.items() if k != "op"}
+            # De un paso intermedio solo interesa su texto si la rutina lo pide con `find`.
+            wants_text = op == "read" or "find" in step or n == len(steps)
+            if op == "open" and not wants_text:
+                args["read_chars"] = 0
+            result = self._dispatch(operation, journal_id, op, args)
+            if not _step_ok(op, result):
+                status = str(result.get("status") or "failed")
+                self.library.ran(name, False, status)
+                return {
+                    "status": "ROUTINE_FAILED", "routine": routine["name"], "failed_step": n, "of": len(steps),
+                    "step": {k: step[k] for k in ("op", "url", "goal") if k in step},
+                    "result": {k: v for k, v in result.items() if k not in ("metrics", "text", "matches")},
+                    "url": browser._eval("location.href"), "title": browser._eval("document.title"),
+                }
+            text = _text_of(result) if wants_text else {}
+            if text:
+                outputs.append({"step": n, **text})
+        self.library.ran(name, True, "ok")
+        done: dict[str, Any] = {
+            "status": "ok", "routine": routine["name"], "steps": len(steps),
+            "url": browser._eval("location.href"), "title": browser._eval("document.title"),
+        }
+        if len(outputs) == 1:
+            done.update({k: v for k, v in outputs[0].items() if k != "step"})
+        elif outputs:
+            done["results"] = outputs
+        return done
 
     def _ensure_browser(self) -> Browser:
         if self._browser is not None and self._browser_is_dead():
@@ -367,6 +449,45 @@ def make_app(executor: Executor) -> web.Application:
             return web.json_response({"error": "not_found"}, status=404)
         return web.FileResponse(path)
 
+    # --- biblioteca: sitios habituales y rutinas -------------------------------------
+    # No pasan por la cola de operaciones: no tocan el navegador y deben responder
+    # aunque haya una tarea en curso.
+
+    def with_library(handler: Callable[[web.Request, Library], Any]) -> Any:
+        async def wrapped(request: web.Request) -> web.Response:
+            if executor.library is None:
+                return web.json_response({"error": "library_unavailable"}, status=404)
+            try:
+                return web.json_response(await handler(request, executor.library))
+            except LibraryError as exc:
+                return web.json_response({"error": "invalid", "reason": str(exc)}, status=400)
+            except (ValueError, TypeError, AttributeError):
+                return web.json_response({"error": "invalid_request"}, status=400)
+        return wrapped
+
+    async def library_list(_: web.Request, library: Library) -> dict:
+        return library.listing()
+
+    async def site_put(request: web.Request, library: Library) -> dict:
+        body = await request.json()
+        return library.save_site(request.match_info["name"], body.get("url"), body.get("notes"), body.get("aliases"))
+
+    async def site_delete(request: web.Request, library: Library) -> dict:
+        return {"deleted": library.delete_site(request.match_info["name"])}
+
+    async def routine_get(request: web.Request, library: Library) -> dict:
+        found = library.routine(request.match_info["name"])
+        if found is None:
+            raise LibraryError("no hay ninguna rutina con ese nombre")
+        return found
+
+    async def routine_put(request: web.Request, library: Library) -> dict:
+        body = await request.json()
+        return library.save_routine(request.match_info["name"], body.get("description"), body.get("steps"))
+
+    async def routine_delete(request: web.Request, library: Library) -> dict:
+        return {"deleted": library.delete_routine(request.match_info["name"])}
+
     async def journal(request: web.Request) -> web.Response:
         return web.json_response({"operations": executor.journal_summary(request.query.get("since"))})
 
@@ -378,6 +499,12 @@ def make_app(executor: Executor) -> web.Application:
         web.put("/v1/uploads/{name}", upload),
         web.get("/v1/downloads/{id}", download),
         web.get("/v1/journal", journal),
+        web.get("/v1/library", with_library(library_list)),
+        web.put("/v1/library/sites/{name}", with_library(site_put)),
+        web.delete("/v1/library/sites/{name}", with_library(site_delete)),
+        web.get("/v1/library/routines/{name}", with_library(routine_get)),
+        web.put("/v1/library/routines/{name}", with_library(routine_put)),
+        web.delete("/v1/library/routines/{name}", with_library(routine_delete)),
     ])
 
     async def close(_: web.Application) -> None:

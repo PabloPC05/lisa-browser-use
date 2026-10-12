@@ -13,6 +13,7 @@ from arc_cua.policies import ChoicePolicy
 from .files import Files
 from .jev import CommandCodeJevTransport
 from .journal import Journal
+from .library import Library
 from .runner import Limits
 from .server import Executor, Settings, make_app
 from .session import Browser
@@ -68,6 +69,7 @@ def main() -> None:
         uploads_dir=uploads,
         vault=vault,
         usage=transport.usage,
+        library=Library(paths.get("library") or Path(paths["journal"]).with_name("biblioteca.sqlite")),
     )
     host, _, port = cfg.get("listen", "127.0.0.1:8787").partition(":")
     web.run_app(make_app(executor), host=host, port=int(port), print=None)
