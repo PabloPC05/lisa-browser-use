@@ -112,6 +112,7 @@ Token del ejecutor como credencial del puente, sección `[browser]` de la config
 | `browser_task` | `goal`, `verification[]`, `inputs{}`, `constraints[]`, `max_actions` (≤ 40, por defecto 30), `find` | `{status, reason, needs_input, actions_taken, page: {url, title, elements, more_below}}` y, con `find`, `text` y `matches` |
 | `browser_read` | `find`, `max_chars` (por defecto 4000), `offset` | `{url, title, text, truncated, total_chars}`; con `find`, `matches`; si queda texto, `next_offset` |
 | `browser_login` | `account` opcional (usa el dominio actual) | `{status: "ok" | "no_credentials" | "rejected" | "wrong_domain" | "vault_unavailable" | "choose_account"}`; con `choose_account`, `accounts: [{name, username}]` |
+| `browser_save_password` | `account` opcional (usa el dominio actual) | Lo mismo que `browser_login` y, con `ok`, `saved`. La contraseña nueva la escribe Pablo en el chat (evento `secret` con `kind: "password"`), se prueba una sola vez y solo se guarda en la entrada existente del baúl si entra. No crea entradas |
 | `browser_attach` | `file` (nombre en la carpeta de adjuntos), `field` (texto del campo) | `{status}` |
 | `browser_screenshot` | — | `{sent: true}`; la imagen va al chat, no al modelo |
 | `browser_sessions` | — | `[{domain, since}]` |
