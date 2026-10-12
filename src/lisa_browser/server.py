@@ -372,7 +372,9 @@ class Executor:
     def _collect(self, operation: Operation) -> list[dict]:
         assert self._files is not None
         found = []
-        for item in self._files.collect(wait_s=0.5):
+        # Un PDF que se quedó abierto en el visor se baja aquí, para que llegue como cualquier descarga.
+        showing_pdf = self._files.save_shown_pdf()
+        for item in self._files.collect(wait_s=3.0 if showing_pdf else 0.5):
             download_id = "d_" + uuid.uuid4().hex[:12]
             self._downloads[download_id] = item
             operation.emit("download", id=download_id, name=item["name"], bytes=item["bytes"])
