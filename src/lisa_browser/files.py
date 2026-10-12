@@ -33,7 +33,9 @@ _SAVE_PDF_JS = (
     "(() => { if (document.contentType !== 'application/pdf' || window.__lisaPdfSaved) return false;"
     " window.__lisaPdfSaved = true;"
     " let name = ''; try { name = decodeURIComponent(location.pathname.split('/').pop() || ''); } catch (e) {}"
-    # Con un nombre vacío, Chromium llama «download» al archivo si la dirección lleva tildes codificadas.
+    # El Chromium del contenedor no tiene configurado un idioma con tildes: con un nombre que las lleve
+    # guarda el archivo como «download». Se le da el nombre sin tildes y solo con caracteres corrientes.
+    " name = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7e]/g, '_');"
     " const a = document.createElement('a'); a.href = location.href; a.download = name || 'documento.pdf';"
     " (document.body || document.documentElement).appendChild(a); a.click(); a.remove(); return true; })()"
 )
