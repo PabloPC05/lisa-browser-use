@@ -11,6 +11,8 @@ Trabajan dos modelos, y casi todo el coste está en el primero:
 
 Por eso todo lo que este servicio hace por sí solo, sin devolver el control al planificador, abarata la tarea.
 
+Y lo que no necesita ningún modelo, mejor todavía: seguir un enlace por su nombre (`follow`) lo resuelve el servicio mirando la página, sin JEV, y sin equivocarse de enlace.
+
 El paquete de Python sigue llamándose `lisa_browser`: es el nombre que usa el servicio desplegado.
 
 ## Documentos

@@ -36,9 +36,10 @@ from .vault import Vault, registrable_domain
 log = logging.getLogger(__name__)
 
 OPS = (
-    "open", "task", "read", "login", "save_password", "attach", "screenshot", "sessions", "logout", "log", "routine",
+    "open", "follow", "task", "read", "login", "save_password", "attach", "screenshot", "sessions", "logout", "log",
+    "routine",
 )
-_COLLECT_AFTER = ("open", "task", "login", "save_password", "routine")
+_COLLECT_AFTER = ("open", "follow", "task", "login", "save_password", "routine")
 
 
 @dataclass(frozen=True)
@@ -108,7 +109,7 @@ def _brief(page: Any) -> dict[str, Any] | None:
 
 def _step_ok(op: str, result: dict[str, Any]) -> bool:
     """Si un paso de una rutina salió como para seguir con el siguiente."""
-    if op == "open":
+    if op in ("open", "follow"):
         return bool(result.get("ok"))
     if op == "task":
         return result.get("status") == "SUBTASK_COMPLETE"
@@ -221,15 +222,22 @@ class Executor:
             self._journal.step(journal_id, step["n"], step["action"], None, step["target"], step["ms"], "jev")
 
         find = str(args.get("find") or "")
-        if op == "open":
-            opened = browser.open(str(args["url"]))
+        if op in ("open", "follow"):
+            # `follow` abre el enlace que se llama así: lo resuelve el ejecutor mirando la página, sin JEV.
+            opened = browser.open(str(args["url"])) if op == "open" else browser.follow(str(args.get("text") or ""))
             # Abrir devuelve ya el principio del texto (o lo que se busca): ahorra una lectura aparte.
             read_chars = int(args.get("read_chars", 1500))
             if opened["ok"] and (read_chars > 0 or find):
                 opened.update(_text_of(browser.read(read_chars or 1500, find=find)))
+            if opened["ok"] and args.get("links"):
+                opened["links"] = browser.links(find)
             return opened
         if op == "read":
-            return browser.read(int(args.get("max_chars", 4000)), find=find, offset=int(args.get("offset", 0)))
+            read = browser.read(int(args.get("max_chars", 4000)), find=find, offset=int(args.get("offset", 0)))
+            if args.get("links"):
+                # Con su dirección, el planificador puede abrir un enlace sin encargar que se pulse.
+                read["links"] = browser.links(find)
+            return read
         if op == "screenshot":
             operation.emit("screenshot", png=base64.b64encode(browser.screenshot()).decode())
             return {"status": "ok", "sent": True}
@@ -312,7 +320,7 @@ class Executor:
                 self.library.ran(name, False, "CANCELLED")
                 return {"status": "CANCELLED", "routine": routine["name"], "stopped_at": n, "of": len(steps)}
             op = step["op"]
-            label = str(step.get("goal") or step.get("url") or step.get("find") or op)[:80]
+            label = str(step.get("goal") or step.get("url") or step.get("text") or step.get("find") or op)[:80]
             operation.emit("step", n=n, action=f"rutina {n}/{len(steps)}: {op}", target=label, ms=0)
             if op == "login" and not browser._eval(HAS_PASSWORD_JS):
                 # La sesión del sitio se conserva entre tareas: si la página no pide contraseña, ya está dentro.
@@ -320,7 +328,7 @@ class Executor:
             args = {k: v for k, v in step.items() if k != "op"}
             # De un paso intermedio solo interesa su texto si la rutina lo pide con `find`.
             wants_text = op == "read" or "find" in step or n == len(steps)
-            if op == "open" and not wants_text:
+            if op in ("open", "follow") and not wants_text:
                 args["read_chars"] = 0
             result = self._dispatch(operation, journal_id, op, args)
             if not _step_ok(op, result):
@@ -328,7 +336,7 @@ class Executor:
                 self.library.ran(name, False, status)
                 return {
                     "status": "ROUTINE_FAILED", "routine": routine["name"], "failed_step": n, "of": len(steps),
-                    "step": {k: step[k] for k in ("op", "url", "goal") if k in step},
+                    "step": {k: step[k] for k in ("op", "url", "text", "goal") if k in step},
                     "result": {k: v for k, v in result.items() if k not in ("metrics", "text", "matches")},
                     "url": browser._eval("location.href"), "title": browser._eval("document.title"),
                 }

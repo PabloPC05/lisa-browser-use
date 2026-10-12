@@ -7,7 +7,7 @@ import unittest
 import httpx
 
 from lisa_browser.session import Browser, excerpt
-from tests.site import Site
+from tests.site import Site, page
 from tests.support import launch_browser
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -89,6 +89,53 @@ class PresentAsDesktop(SessionCase):
         self.assertEqual(self.browser._eval("navigator.language"), "es-ES")
         self.assertEqual(self.browser._eval("Intl.DateTimeFormat().resolvedOptions().timeZone"), "Europe/Madrid")
         self.assertEqual(self.browser._eval("Intl.DateTimeFormat().resolvedOptions().locale"), "es-ES")
+
+
+class LinksAndFollow(SessionCase):
+    PAGE = (
+        "<h1>Sistemas Operativos I</h1>"
+        "<p><a href='/horarios'>Práctica 1: El intérprete</a></p>"
+        "<p><a href='/largo'>Práctica 2. Procesos <span>Ficheiro</span></a></p>"
+        "<p><a href='/login'>Entrega de la práctica 2</a></p>"
+        "<p><a href='/login#arriba'>Entrega de la práctica 2 (otra vez)</a></p>"
+        "<p><a href='#ancla'>Sin dirección propia</a> <a href='javascript:void(0)'>Menú</a>"
+        " <a href='/horarios' style='display:none'>Oculto</a></p>"
+    )
+
+    def setUp(self) -> None:
+        self.site.pages["/curso"] = page("Curso", self.PAGE)
+        self.browser.open(self.site.url("/curso"))
+
+    def test_links_come_with_their_address_and_can_be_filtered(self) -> None:
+        links = self.browser.links()
+        self.assertIn({"text": "Práctica 2. Procesos Ficheiro", "url": self.site.url("/largo")}, links)
+        self.assertNotIn("Oculto", [link["text"] for link in links])
+        self.assertNotIn("Menú", [link["text"] for link in links])
+        # Sin tildes ni mayúsculas, como buscaría una persona.
+        self.assertEqual(
+            [link["text"] for link in self.browser.links("PRACTICA 2")],
+            ["Práctica 2. Procesos Ficheiro", "Entrega de la práctica 2", "Entrega de la práctica 2 (otra vez)"],
+        )
+        self.assertEqual(self.browser.links("piscina"), [])
+
+    def test_follow_opens_the_link_with_that_name_without_any_model(self) -> None:
+        # «Práctica 2» empieza un solo enlace; los de entrega solo lo contienen y no cuentan.
+        followed = self.browser.follow("práctica 2")
+        self.assertEqual((followed["ok"], followed["followed"], followed["url"]), (True, "Práctica 2. Procesos Ficheiro", self.site.url("/largo")))
+
+    def test_follow_does_not_guess_between_different_destinations(self) -> None:
+        unclear = self.browser.follow("práctica")
+        self.assertEqual((unclear["ok"], unclear["error"]), (False, "ambiguous_link"))
+        self.assertEqual([link["text"] for link in unclear["links"]], ["Práctica 1: El intérprete", "Práctica 2. Procesos Ficheiro"])
+        self.assertEqual(self.browser._eval("location.pathname"), "/curso")  # no se ha movido
+        # Dos enlaces al mismo sitio no son una duda.
+        same = self.browser.follow("Entrega de la práctica 2")
+        self.assertEqual((same["ok"], self.browser._eval("location.pathname")), (True, "/login"))
+
+    def test_follow_says_when_there_is_no_such_link(self) -> None:
+        missing = self.browser.follow("Práctica 7")
+        self.assertEqual((missing["ok"], missing["error"]), (False, "no_link"))
+        self.assertEqual(self.browser.follow("  ")["error"], "no_link")
 
 
 class ReadWithFind(SessionCase):

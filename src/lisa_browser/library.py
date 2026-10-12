@@ -26,7 +26,7 @@ from typing import Any, Iterable, Mapping
 from .vault import registrable_domain
 
 # Lo que puede hacer un paso de una rutina. Adjuntar y cerrar sesión no se automatizan.
-ROUTINE_OPS = ("open", "task", "login", "read")
+ROUTINE_OPS = ("open", "follow", "task", "login", "read")
 MAX_STEPS = 20
 MAX_NOTES = 600
 
@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS routines (
 _PARAM = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 _STEP_KEYS = {
     "open": {"url": str, "find": str, "read_chars": int},
+    "follow": {"text": str, "find": str, "read_chars": int},
     "task": {"goal": str, "verification": list, "inputs": dict, "constraints": list, "max_actions": int, "find": str,
              "read_chars": int},
     "login": {"account": str},
@@ -123,6 +124,8 @@ def check_steps(steps: Any) -> list[dict[str, Any]]:
             out[field] = value
         if op == "open" and not re.match(r"^(https?://|\{)", out.get("url", "")):
             raise LibraryError(f"paso {n}: `open` necesita una dirección http(s) en `url`")
+        if op == "follow" and "text" not in out:
+            raise LibraryError(f"paso {n}: `follow` necesita en `text` el texto del enlace")
         if op == "task":
             if "goal" not in out or not out.get("verification"):
                 raise LibraryError(f"paso {n}: `task` necesita `goal` y `verification`")

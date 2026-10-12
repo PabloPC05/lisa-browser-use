@@ -333,3 +333,13 @@ La barrera de aprobaciones y la redacción de secretos son las de cada operació
 
 **Qué no hace.** No graba clics para repetirlos sin JEV, no aprende rutinas sola (las guarda el planificador cuando una gestión sale bien) y no adjunta archivos ni cierra sesiones.
 
+## 13. Enlaces con dirección y `follow` (12-10-2026)
+
+En la primera gestión real, casi todo lo que el planificador encargó a JEV fue «pulsa el enlace que se llama X», y ahí estuvieron los fallos: una tarjeta de curso que no respondía al clic (`BLOCKED`) y un enlace equivocado (la práctica 1 en vez de la 2). Para seguir un enlace no hace falta un modelo.
+
+- `open` y `read` aceptan `links: true` y devuelven, además del texto, los enlaces visibles con su dirección (los que casan con `find`, hasta 15). El planificador puede abrir uno él mismo.
+- Operación `follow` con `{text}`: abre el enlace visible que se llama así. Gana el que coincide exactamente; si no hay, el que empieza así; si no, el que lo contiene, siempre sin tildes ni mayúsculas. Si en el mejor grupo hay enlaces a sitios distintos no elige: devuelve `ambiguous_link` con los candidatos. Admite `find` y `read_chars` como `open`.
+- `follow` es también un paso de rutina. Una rutina hecha de `open` y `follow` no llama a JEV.
+
+Los enlaces sin dirección web (`javascript:`, menús que despliegan) no entran: para esos sigue estando `task`.
+
