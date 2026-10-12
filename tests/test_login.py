@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 import stat
@@ -12,7 +13,7 @@ from pathlib import Path
 from arc_cua.policies import ChoicePolicy
 
 from lisa_browser.journal import Journal
-from lisa_browser.login import login
+from lisa_browser.login import login, save_password
 from lisa_browser.vault import BitwardenCliVault, Entry, FakeVault, VaultUnavailable, registrable_domain
 from tests.site import Site, page
 from tests.support import ByName, launch_browser
@@ -45,6 +46,7 @@ def login_page(after_password: str) -> str:
 LOGIN_PAGES = {
     "/login": login_page("location.href = '/dentro';"),
     "/login-codigo": login_page(_VERIFY),
+    "/login-codigo-sin-marca": login_page(_VERIFY.replace("autocomplete='one-time-code'", "name='code'")),
     "/dentro": page("Tu carné", "<h1>Hola, Pablo</h1><p>Tu carné caduca el 31 de diciembre.</p>"),
     "/portada": page("Portada", "<h1>Portada</h1><p>Sin formulario.</p>"),
 }
@@ -189,6 +191,14 @@ class CodeFromChat(LoginCase):
         self.assertEqual(self.where(), "dentro")
         self.assertNotIn(CODE, json.dumps([result, self.steps]))
 
+    def test_code_field_without_autocomplete_is_recognised_by_its_name(self) -> None:
+        # Como Amazon: tras la contraseña el paso se da por completo y el campo no lleva autocomplete.
+        steps = TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)] + TYPE_CODE + [("SUBTASK_COMPLETE",)]
+        result = self.login("/login-codigo-sin-marca", steps)
+        self.assertEqual(result, {"status": "ok", "domain": "socios.test"})
+        self.assertEqual(self.code_requests, [("socios.test", 300)])
+        self.assertEqual(self.where(), "dentro")
+
     def test_wrong_code_is_asked_again_once_and_then_gives_up(self) -> None:
         self.codes = ["000000", "111111", CODE]
         steps = TYPE_AND_ENTER + [("NEEDS_INPUT", "Código de verificación")] + (TYPE_CODE + [("NEEDS_AGENT",)]) * 2
@@ -248,6 +258,73 @@ class CodeNotInJournal(LoginCase):
         self.assertIn("[secret]", dump)
 
 
+class SavesNewPassword(LoginCase):
+    """La entrada del baúl tiene una contraseña que ya no vale y Pablo da la nueva por el chat."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.vault = FakeVault([Entry("e1", "Biblioteca Socios", USER, "caducada-000", ("http://socios.test",))])
+        self.password_requests: list[tuple[str, str, float]] = []
+        self.new_password: str | None = PASSWORD
+
+    def ask_password(self, domain: str, username: str, timeout: float) -> str | None:
+        self.password_requests.append((domain, username, timeout))
+        return self.new_password
+
+    def save(self, path: str, steps, **options):
+        self.assertTrue(self.browser.open(self.site.url(path, "socios.test"))["ok"])
+        return save_password(
+            self.browser, ByName(steps), self.vault, ask_password=self.ask_password, ask_code=self.ask_code,
+            on_secret=self.secrets.append, on_step=self.steps.append, **options,
+        )
+
+    def test_a_password_that_works_is_saved_in_the_entry(self) -> None:
+        result = self.save("/login", TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)])
+        self.assertEqual(result, {"status": "ok", "domain": "socios.test", "saved": True})
+        self.assertEqual(self.password_requests, [("socios.test", USER, 300)])
+        self.assertEqual(self.vault.entries[0].password, PASSWORD)
+        self.assertEqual(self.where(), "dentro")
+        # La contraseña nueva se trata como la del baúl: quien registra la recibe para ocultarla y no sale en nada más.
+        self.assertEqual(self.secrets, [PASSWORD])
+        self.assertNotIn(PASSWORD, json.dumps([result, self.steps]))
+
+    def test_a_password_that_does_not_work_is_tried_once_and_not_saved(self) -> None:
+        self.new_password = "tampoco-es-111"
+        result = self.save("/login", TYPE_AND_ENTER + TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)])
+        self.assertEqual(result, {"status": "rejected", "domain": "socios.test", "reason": "password"})
+        self.assertEqual(self.browser._eval("window.intentos"), 1)
+        self.assertEqual(self.vault.entries[0].password, "caducada-000")
+
+    def test_without_an_answer_nothing_is_typed_or_saved(self) -> None:
+        self.new_password = None
+        result = self.save("/login", TYPE_AND_ENTER)
+        self.assertEqual(result, {"status": "rejected", "domain": "socios.test", "reason": "password_timeout"})
+        self.assertEqual((self.browser._eval("window.intentos"), self.steps), (0, []))
+        self.assertEqual(self.vault.entries[0].password, "caducada-000")
+
+    def test_with_several_accounts_it_asks_which_before_asking_for_the_password(self) -> None:
+        self.vault.entries.append(Entry("e2", "Otra", "13579@socios.test", "otra-clave-0000", ("http://socios.test/",)))
+        result = self.save("/login", TYPE_AND_ENTER)
+        self.assertEqual(result["status"], "choose_account")
+        self.assertEqual(self.password_requests, [])
+
+    def test_a_site_without_entry_is_not_created(self) -> None:
+        self.vault.entries.clear()
+        result = self.save("/login", TYPE_AND_ENTER)
+        self.assertEqual(result, {"status": "no_credentials", "domain": "socios.test"})
+        self.assertEqual((self.password_requests, self.vault.entries), ([], []))
+
+    def test_a_vault_that_fails_to_save_is_reported_with_the_session_open(self) -> None:
+        def broken(entry, password):
+            raise VaultUnavailable("bw edit terminó con código 1")
+
+        self.vault.set_password = broken
+        result = self.save("/login", TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)])
+        self.assertEqual(
+            result, {"status": "ok", "domain": "socios.test", "saved": False, "reason": "bw edit terminó con código 1"},
+        )
+
+
 class VaultDown(LoginCase):
     def test_unavailable_vault_is_reported(self) -> None:
         result = self.login("/login", TYPE_AND_ENTER, vault=FakeVault(broken=True))
@@ -289,6 +366,10 @@ case "$1 $2" in
            {"id":"i2","type":1,"name":"Otro","login":{"username":"x","password":"pw-otro","uris":[{"uri":"https://otro.example"}]}},
            {"id":"i3","type":2,"name":"Nota segura"}]' ;;
   "get totp") echo "654321" ;;
+  "get item") [ "$BW_SESSION" = "SESION-123" ] || exit 1
+    echo '{"id":"i1","type":1,"name":"USC","notes":"no tocar","login":{"username":"pablo","password":"pw-usc","totp":"otpauth://x","uris":[{"uri":"https://cas.usc.gal/login"}]}}' ;;
+  "edit item") [ "$BW_SESSION" = "SESION-123" ] || exit 1
+    cat > "$FAKE_BW_LOG.stdin" ;;
   *) exit 2 ;;
 esac
 """
@@ -323,6 +404,25 @@ class BitwardenCli(unittest.TestCase):
         for secret in ("maestra-de-prueba", "s3cr3t-api", "SESION-123"):
             self.assertNotIn(secret, calls)
 
+    def test_saves_a_new_password_keeping_the_rest_of_the_entry(self) -> None:
+        vault = self.vault()
+        vault._bw_call = _with_log_env(vault._bw_call, self.log)
+        [entry] = vault.find("https://aulas.usc.gal/curso")
+        vault.set_password(entry, "nueva-Clave-77")
+        calls = self.log.read_text()
+        self.assertIn("get item i1", calls)
+        self.assertIn("edit item i1 --nointeraction", calls)
+        # La contraseña nueva no viaja como argumento de programa, ni en claro ni codificada.
+        sent = Path(f"{self.log}.stdin").read_text()
+        self.assertNotIn("nueva-Clave-77", calls)
+        self.assertNotIn(sent, calls)
+        saved = json.loads(base64.b64decode(sent))
+        self.assertEqual(saved["login"]["password"], "nueva-Clave-77")
+        self.assertEqual(
+            (saved["notes"], saved["login"]["username"], saved["login"]["totp"], saved["login"]["uris"]),
+            ("no tocar", "pablo", "otpauth://x", [{"uri": "https://cas.usc.gal/login"}]),
+        )
+
     def test_wrong_master_password_is_unavailable_without_leaking_it(self) -> None:
         vault = self.vault(master="equivocada")
         vault._bw_call = _with_log_env(vault._bw_call, self.log)
@@ -334,8 +434,8 @@ class BitwardenCli(unittest.TestCase):
 def _with_log_env(call, log: Path):
     """El bw de pruebas necesita saber dónde anotar; el real no recibe nada más que sus secretos."""
 
-    def wrapped(*args, env=None):
-        return call(*args, env={**(env or {}), "FAKE_BW_LOG": str(log)})
+    def wrapped(*args, env=None, stdin=None):
+        return call(*args, env={**(env or {}), "FAKE_BW_LOG": str(log)}, stdin=stdin)
 
     return wrapped
 

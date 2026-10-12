@@ -34,6 +34,7 @@ def main() -> None:
     with open(args.config, "rb") as fh:
         cfg = tomllib.load(fh)
     jev, limits, paths = cfg["jev"], cfg.get("limits", {}), cfg["paths"]
+    identity = cfg.get("identity", {})
 
     transport = CommandCodeJevTransport(
         api_key=_secret(jev["api_key_file"]), base_url=jev["base_url"], model=jev["model"],
@@ -59,7 +60,9 @@ def main() -> None:
             code_seconds=float(limits.get("code_seconds", 300)),
             price_per_mtok=transport.price_per_mtok,
         ),
-        connect=lambda: Browser.connect(cfg["cdp_endpoint"]),
+        connect=lambda: Browser.connect(
+            cfg["cdp_endpoint"], locale=identity.get("locale", ""), timezone=identity.get("timezone", ""),
+        ),
         policy_for=lambda operation: policy,
         journal=Journal(paths["journal"]),
         files_for=lambda browser: Files(

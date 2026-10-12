@@ -133,7 +133,7 @@ class Browser:
         ))
 
     @classmethod
-    def connect(cls, endpoint: str) -> Browser:
+    def connect(cls, endpoint: str, *, locale: str = "", timezone: str = "") -> Browser:
         """Se une al Chromium del contenedor y sigue en la pestaña en la que estaba.
 
         Reutiliza la pestaña usada más recientemente y cierra las demás: una reconexión
@@ -152,7 +152,48 @@ class Browser:
                     log.debug("no se pudo cerrar la pestaña %s", stale.get("id"), exc_info=True)
         else:
             target_id = connection.call("Target.createTarget", {"url": "about:blank"})["targetId"]
-        return cls(ChromeBackend(connection, target_id))
+        browser = cls(ChromeBackend(connection, target_id))
+        browser.present_as_desktop(locale=locale, timezone=timezone)
+        return browser
+
+    def present_as_desktop(self, *, locale: str = "", timezone: str = "") -> None:
+        """Hace que la pestaña se presente como un Chromium de escritorio corriente.
+
+        Un Chromium sin ventana se anuncia como «HeadlessChrome» y usa el idioma y la hora del
+        servidor: se quita esa marca y se fijan el idioma y la zona horaria de Pablo. Se repite
+        en cada pestaña a la que pase la sesión.
+        """
+        attach = self.backend._attach
+
+        def attach_and_present(target_id: str) -> None:
+            attach(target_id)
+            self._present(locale, timezone)
+
+        self.backend._attach = attach_and_present  # type: ignore[method-assign]
+        self._present(locale, timezone)
+
+    def _present(self, locale: str, timezone: str) -> None:
+        agent = self._eval("navigator.userAgent") or ""
+        if "Headless" in agent:
+            version = re.search(r"Chrome/(\d+)[\d.]*", agent)
+            full, major = (version.group(0)[7:], version.group(1)) if version else ("", "")
+            brands = [{"brand": "Chromium", "version": major}, {"brand": "Not_A Brand", "version": "24"}]
+            override: dict[str, Any] = {
+                "userAgent": agent.replace("HeadlessChrome", "Chrome"),
+                "userAgentMetadata": {
+                    "brands": brands,
+                    "fullVersionList": [{**brands[0], "version": full}, {**brands[1], "version": "24.0.0.0"}],
+                    "platform": "Linux", "platformVersion": "", "architecture": "x86", "bitness": "64",
+                    "model": "", "mobile": False,
+                },
+            }
+            if locale:
+                override["acceptLanguage"] = f"{locale},{locale.split('-')[0]};q=0.9"
+            self._call("Emulation.setUserAgentOverride", override)
+        if locale:
+            self._call("Emulation.setLocaleOverride", {"locale": locale})
+        if timezone:
+            self._call("Emulation.setTimezoneOverride", {"timezoneId": timezone})
 
     def close(self) -> None:
         self.backend.close()

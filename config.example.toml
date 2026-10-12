@@ -22,6 +22,11 @@ client_secret_file = "/run/credentials/lisa-browser.service/vault-client-secret"
 master_password_file = "/run/credentials/lisa-browser.service/vault-master-password"
 data_dir = "/var/lib/lisa-browser/bw"
 
+# Cómo se presenta el navegador a las webs: idioma y zona horaria de Pablo, no los del servidor.
+[identity]
+locale = "es-ES"
+timezone = "Europe/Madrid"
+
 [limits]
 max_actions = 30
 operation_seconds = 300   # no cuenta lo que se espera a Pablo
