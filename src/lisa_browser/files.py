@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from urllib.parse import unquote, urlparse
+
 import time
 import unicodedata
 from pathlib import Path
@@ -50,6 +53,13 @@ def _signature(path: Path) -> tuple[int, int]:
     return (stat.st_mtime_ns, stat.st_size)
 
 
+def readable_name(url: str) -> str:
+    """Nombre de archivo que sale de una dirección: el último tramo, sin tildes ni caracteres raros."""
+    last = unquote(urlparse(url).path.rsplit("/", 1)[-1])
+    plain = "".join(ch for ch in unicodedata.normalize("NFD", last) if unicodedata.category(ch) != "Mn")
+    return re.sub(r"[^A-Za-z0-9._ -]", "_", plain).strip(" .")
+
+
 class Files:
     def __init__(
         self, browser: Browser, downloads_dir: str | Path, uploads_dir: str | Path, *,
@@ -67,6 +77,14 @@ class Files:
         })
 
     # --- descargas --------------------------------------------------------------
+
+    def shown_pdf_name(self) -> str:
+        """Nombre legible del PDF que hay en pantalla, o cadena vacía si la página no es un PDF."""
+        try:
+            url = self._browser._eval("document.contentType === 'application/pdf' ? location.href : ''") or ""
+        except Exception:
+            return ""
+        return readable_name(url) if url else ""
 
     def save_shown_pdf(self) -> bool:
         """Si la página es un PDF abierto en el visor, lo descarga. Devuelve si había que hacerlo.
