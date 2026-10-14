@@ -32,6 +32,19 @@ def registrable_domain(url_or_host: str) -> str:
     return registered or host
 
 
+# Dominios que comparten unas mismas credenciales. Cl@ve Permanente pide la contraseña en
+# servidores de varios organismos (la pasarela en clave.gob.es, el formulario en la Seguridad
+# Social y, según el trámite, la Agencia Tributaria): la entrada del baúl vale en todos ellos.
+EQUIVALENT_DOMAINS: tuple[frozenset[str], ...] = (
+    frozenset({"clave.gob.es", "seg-social.gob.es", "seg-social.es", "agenciatributaria.gob.es", "agenciatributaria.es"}),
+)
+
+
+def equivalent_domains(domain: str) -> frozenset[str]:
+    """El grupo de dominios equivalentes al de `domain` (él mismo si no tiene)."""
+    return next((group for group in EQUIVALENT_DOMAINS if domain in group), frozenset({domain}) if domain else frozenset())
+
+
 @dataclass(frozen=True)
 class Entry:
     id: str
@@ -42,9 +55,9 @@ class Entry:
     has_totp: bool = False
 
     def matches(self, page_url: str) -> bool:
-        """Una contraseña solo vale para el dominio guardado junto a ella."""
-        domain = registrable_domain(page_url)
-        return bool(domain) and any(registrable_domain(uri) == domain for uri in self.uris)
+        """Una contraseña solo vale para el dominio guardado junto a ella (o uno equivalente, como en Cl@ve)."""
+        domains = equivalent_domains(registrable_domain(page_url))
+        return bool(domains) and any(registrable_domain(uri) in domains for uri in self.uris)
 
 
 class VaultUnavailable(RuntimeError):
@@ -153,7 +166,13 @@ class BitwardenCliVault:
         self._session: str | None = None
 
     def find(self, url: str) -> list[Entry]:
-        return [e for e in self._items("--url", url) if e.matches(url)]
+        # bw busca por el dominio de la dirección: en un grupo equivalente se busca en cada uno.
+        found: dict[str, Entry] = {}
+        domain = registrable_domain(url)
+        for other in sorted(equivalent_domains(domain) - {domain}):
+            found.update((e.id, e) for e in self._items("--url", f"https://{other}/"))
+        found.update((e.id, e) for e in self._items("--url", url))
+        return [e for e in found.values() if e.matches(url)]
 
     def search(self, text: str) -> list[Entry]:
         return self._items("--search", text)
