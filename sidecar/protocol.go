@@ -5,7 +5,7 @@ package main
 //
 // App → sidecar:
 //
-//	{"type":"config", "password", "key", "insecureUpstream", "roots", "allowedPeers", "allowedHosts"}   (first line)
+//	{"type":"config", "password", "key", "insecureUpstream", "roots", "allowedPeers", "allowedHosts", "allowPrivateHosts"}   (first line)
 //	{"type":"session", "id", "session", "listen"?, "hosts", "identity"}
 //	    → {"type":"ack", "id", "port", "error"?}   (the first one opens the session's port)
 //	{"type":"end", "session"}
@@ -34,6 +34,8 @@ type inMessage struct {
 	// Lisa (lisa.go): quién puede usar el proxy sin contraseña y a qué dominios puede ir.
 	AllowedPeers []string `json:"allowedPeers,omitempty"`
 	AllowedHosts []string `json:"allowedHosts,omitempty"`
+	// Solo para pruebas: direcciones internas que el proxy puede alcanzar (host o host:puerto).
+	AllowPrivateHosts []string `json:"allowPrivateHosts,omitempty"`
 
 	// session, end. Listen: the port to reopen after a restart ("127.0.0.1:<port>").
 	Session  string        `json:"session,omitempty"`

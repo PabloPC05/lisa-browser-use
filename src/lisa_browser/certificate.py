@@ -97,13 +97,19 @@ class Sidecar:
 
     def __init__(
         self, binary: str, *, proxy_key_pem: str, listen: str, allowed_peers: Sequence[str],
-        allowed_hosts: Sequence[str], spawn: Callable[..., Any] = subprocess.Popen,
+        allowed_hosts: Sequence[str], roots: Sequence[str] = (), allow_private: Sequence[str] = (),
+        spawn: Callable[..., Any] = subprocess.Popen,
     ) -> None:
         self._binary = binary
         self._proxy_key = pem_to_pkcs8_der(proxy_key_pem)
         self.listen = listen
         self._peers = list(allowed_peers)
         self._hosts = list(allowed_hosts)
+        # Normalmente vacío: el proxy verifica las sedes con el almacén de confianza del sistema.
+        # Solo las pruebas pasan aquí la CA de su servidor de mentira.
+        self._roots = list(roots)
+        # Solo pruebas: direcciones internas que el proxy puede alcanzar.
+        self._allow_private = list(allow_private)
         self._spawn = spawn
         self._proc: Any = None
         self._lock = threading.Lock()
@@ -111,6 +117,8 @@ class Sidecar:
         self._ack_ready = threading.Condition()
         self._next_id = 0
         self.spki = ""
+        # Puerto real donde escucha el proxy (lo dice el primer ack; útil si se pidió el 0).
+        self.port = 0
         self.events: list[dict[str, Any]] = []
 
     def start(self) -> None:
@@ -120,10 +128,15 @@ class Sidecar:
             self._proc = self._spawn(
                 [self._binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
             )
-            self._write({
+            config: dict[str, Any] = {
                 "type": "config", "key": base64.b64encode(self._proxy_key).decode(),
                 "allowedPeers": self._peers, "allowedHosts": self._hosts,
-            })
+            }
+            if self._roots:
+                config["roots"] = self._roots
+            if self._allow_private:
+                config["allowPrivateHosts"] = self._allow_private
+            self._write(config)
             ready = json.loads(self._proc.stdout.readline() or b"{}")
             if ready.get("type") != "ready":
                 err = self._proc.stderr.read().decode(errors="replace")[:300] if self._proc.poll() is not None else ""
@@ -149,6 +162,8 @@ class Sidecar:
         ack = self._wait_ack(ident)
         if ack.get("error"):
             raise CertificateError("proxy_error", str(ack["error"])[:200])
+        if ack.get("port"):
+            self.port = int(ack["port"])
 
     def _write(self, message: dict[str, Any]) -> None:
         self._proc.stdin.write(json.dumps(message).encode() + b"\n")
