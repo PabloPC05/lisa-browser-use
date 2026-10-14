@@ -442,3 +442,40 @@ def _with_log_env(call, log: Path):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClaveSharesItsPassword(LoginCase):
+    """Cl@ve Permanente: la contraseña guardada para clave.gob.es vale donde Cl@ve la pide."""
+
+    def test_entry_matches_every_domain_of_the_clave_group_and_no_other(self) -> None:
+        entry = Entry("c1", "Cl@ve Permanente", "00000000T", PASSWORD, ("https://pasarela.clave.gob.es/",))
+        for url in ("https://pasarela.clave.gob.es/x", "https://clave-dninbrt.seg-social.gob.es/login",
+                    "https://www1.agenciatributaria.gob.es/y", "https://w2.seg-social.es/z"):
+            self.assertTrue(entry.matches(url), url)
+        for url in ("https://clave.gob.es.example.com/", "https://sede.dgt.gob.es/", "https://evil-seg-social.gob.es.com/"):
+            self.assertFalse(entry.matches(url), url)
+
+    def test_logs_in_on_another_domain_of_the_group(self) -> None:
+        from lisa_browser import vault as vault_module
+
+        groups = vault_module.EQUIVALENT_DOMAINS
+        vault_module.EQUIVALENT_DOMAINS = (frozenset({"pasarela.test", "formulario.test"}),)
+        self.addCleanup(setattr, vault_module, "EQUIVALENT_DOMAINS", groups)
+        entry = Entry("c1", "Cl@ve de pruebas", USER, PASSWORD, ("http://pasarela.test/",))
+        result = self.login("/login", TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)], vault=FakeVault([entry]), host="formulario.test")
+        self.assertEqual(result["status"], "ok")
+
+    def test_bitwarden_looks_for_the_entry_in_each_domain_of_the_group(self) -> None:
+        bw = BitwardenCliVault(server="https://x", client_id="i", client_secret="s", master_password="m", data_dir="/tmp")
+        asked: list[str] = []
+        entry = Entry("c1", "Cl@ve", "00000000T", PASSWORD, ("https://pasarela.clave.gob.es/",))
+
+        def items(flag: str, value: str) -> list[Entry]:
+            asked.append(value)
+            return [entry] if "clave.gob.es" in value else []
+
+        bw._items = items  # type: ignore[method-assign]
+        found = bw.find("https://clave-dninbrt.seg-social.gob.es/login")
+        self.assertEqual([e.id for e in found], ["c1"])
+        self.assertIn("https://clave.gob.es/", asked)
+        self.assertEqual(bw.find("https://sede.dgt.gob.es/"), [])
