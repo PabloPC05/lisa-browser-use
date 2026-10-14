@@ -32,6 +32,7 @@ from .journal import Journal
 from .library import Library, LibraryError, MissingParams, substitute
 from .login import HAS_PASSWORD_JS, login, save_password
 from .runner import Limits
+from .screencast import Screencast
 from .session import Browser
 from .vault import Vault, registrable_domain
 
@@ -41,6 +42,9 @@ OPS = (
     "open", "follow", "task", "read", "login", "save_password", "attach", "screenshot", "sessions", "logout", "log",
     "routine", "card",
 )
+#: La emisión del navegador en vivo de la aplicación, para quien la necesite fuera de su ruta.
+SCREENCAST = web.AppKey("screencast", Screencast)
+
 _COLLECT_AFTER = ("open", "follow", "task", "login", "save_password", "routine", "card")
 
 
@@ -395,6 +399,13 @@ class Executor:
             self._files = self._files_for(self._browser)
         return self._browser
 
+    def live_source(self) -> tuple[str, str] | None:
+        """La pestaña en la que trabaja el ejecutor, para el navegador en vivo; None si aún no hay navegador."""
+        browser = self._browser
+        if browser is None or browser.ws_url is None:
+            return None
+        return browser.ws_url, browser.backend.target_id
+
     def _browser_is_dead(self) -> bool:
         if self._browser is None:
             return True
@@ -538,10 +549,31 @@ def make_app(executor: Executor) -> web.Application:
     async def routine_delete(request: web.Request, library: Library) -> dict:
         return {"deleted": library.delete_routine(request.match_info["name"])}
 
+    # --- navegador en vivo (lisa-assistant D86) ------------------------------------
+    # Solo para mirar. Una línea por evento: `frame` (JPEG en base64), `idle` y `ping`.
+
+    screencast = Screencast(executor.live_source)
+
+    async def live(request: web.Request) -> web.StreamResponse:
+        response = web.StreamResponse(headers={"Content-Type": "application/x-ndjson", "Cache-Control": "no-store"})
+        await response.prepare(request)
+        try:
+            async with screencast.watch() as events:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(events.get(), timeout=15)
+                    except asyncio.TimeoutError:
+                        event = {"type": "ping"}
+                    await response.write(json.dumps(event).encode() + b"\n")
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        return response
+
     async def journal(request: web.Request) -> web.Response:
         return web.json_response({"operations": executor.journal_summary(request.query.get("since"))})
 
     app = web.Application(middlewares=[auth], client_max_size=4 * 1024**3)
+    app[SCREENCAST] = screencast
     app.add_routes([
         web.post("/v1/operations", start),
         web.post("/v1/operations/{id}/answers", answer),
@@ -549,6 +581,7 @@ def make_app(executor: Executor) -> web.Application:
         web.put("/v1/uploads/{name}", upload),
         web.get("/v1/downloads/{id}", download),
         web.get("/v1/journal", journal),
+        web.get("/v1/screencast", live),
         web.get("/v1/library", with_library(library_list)),
         web.put("/v1/library/sites/{name}", with_library(site_put)),
         web.delete("/v1/library/sites/{name}", with_library(site_delete)),

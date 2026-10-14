@@ -79,6 +79,10 @@ Para hacer trámites en sedes electrónicas (propuesta en `lisa-assistant/docs/t
 
 `tests/test_sede.py` monta una sede HTTPS que pide el certificado de cliente y la alcanza con el binario real del proxy, configurado como el ejecutor. Prueba que sin certificado la sede rechaza (403), con él entra, y que un dominio fuera de la lista se rechaza. El proxy nunca conecta con direcciones internas; esa sede de prueba vive en loopback y se permite con `allow_private`/`allowPrivateHosts`, que solo usan las pruebas y queda vacío en producción.
 
+## Navegador en vivo
+
+`GET /v1/screencast`, con el token, emite la pestaña en la que trabaja el ejecutor mientras alguien mira (lisa-assistant D86). Devuelve una línea JSON por evento: `frame` (JPEG en base64, con ancho y alto), `idle` (aún no hay navegador) y `ping` cada 15 s. Va por una conexión propia a Chrome (`Page.startScreencast`), así que no espera a que termine una tarea ni la retrasa. Hay una sola emisión para todos los que miran, a 5 fotogramas por segundo como mucho, y se para cuando se va el último. Los fotogramas no se guardan. Solo sirve para mirar.
+
 ## Pruebas
 
 ```bash
