@@ -138,16 +138,17 @@ Durante el desarrollo no se entra en bancos ni en sitios reales con efecto (deci
   - Desviaciones del plan: usuarios distintos para el proceso del navegador (`lisa-chromium`) y el ejecutor (`lisa-navegador`); `socat` dentro de la imagen porque Chromium solo abre su puerto de control en 127.0.0.1; perfil de llamadas al sistema propio (el de Docker más `clone`, `unshare`, `setns` y `chroot`) para no desactivar el aislamiento de Chromium; resolución de nombres pública (9.9.9.9 y 1.1.1.1) en el contenedor; `pkgs/arc-cua.nix` copiado al repositorio `lisa`; el contenedor tampoco alcanza la red de casa ni Tailscale, y el puerto de control se limita también a los procesos del propio servidor. La regla que limita a la máquina virtual está escrita y desactivada (`limitarMaquinaVirtual`).
 
 ### T11 — lisa-av: configuración e instrucciones
-- Estado: en curso
+- Estado: verificada
 - Requisitos: R1, R2
 - Depende de: T9, T10
-- Archivos propios: en el repositorio `lisa-asistente-personal`: `hosts/lisa-asistente-personal/asistente.nix`, `hosts/lisa-asistente-personal/instrucciones.md`
+- Archivos propios: entonces, en el repositorio `lisa-asistente-personal`: `hosts/lisa-asistente-personal/asistente.nix` y `hosts/lisa-asistente-personal/instrucciones.md`. Hoy la máquina y el chat son `lisa-assistant`, y las instrucciones y herramientas de Lisa, `lisa-agent`.
 - Punto de revisión: sí — primera tarea real desde el chat en una web pública, hecha por Pablo.
 - Briefing: PLAN §3.4.
 - Aceptación:
   1. Pablo pide en el chat un dato de una web pública que puede comprobar a mano y recibe el dato, la dirección y una captura.
   2. `browser_log` muestra la tarea con `decided_by = 'jev'` en todos sus pasos, tiempo por paso y coste.
 - Evidencia (parcial, 10-10-2026; repositorio `lisa-asistente-personal`, commit `5d99ea3`): puente activo con el servidor de herramientas en 127.0.0.1:8790 y el código de la rama `browser-use`. Comprobación real sin el canal de mensajería (segundo puente con canal en memoria, Claude real por ACP y el ejecutor del servidor): «Abre https://example.com con el navegador y dime el título…» → respuesta correcta («Example Domain» y la primera frase) y una captura de 57.659 bytes en 13,5 s, sin ninguna petición de permiso: Claude conecta el servidor MCP y sus herramientas no preguntan. Se desplegó antes de cerrar T10 porque lo único pendiente allí es la regla de la máquina virtual, de la que T11 no depende. **Pendiente:** las dos aceptaciones, que son la prueba de Pablo desde el chat; `decided_by = 'jev'` solo aparecerá si la tarea necesita `browser_task`.
+- Evidencia (14-10-2026, chat web de `lisa-assistant` en lisa-av, modelo por defecto por el Claude Code real): en un chat nuevo, «entra en https://es.wikipedia.org, escribe «Santiago de Compostela» en su cuadro de búsqueda y busca… dime cuántos habitantes tiene, la dirección y una captura» → `browser_open`, `browser_task`, `browser_read` (con `find`) y `browser_screenshot`; respuesta «100 965 habitantes (INE 2025)», con https://es.wikipedia.org/wiki/Santiago_de_Compostela y la captura en el chat (aceptación 1). En `registro.sqlite` del servidor, la tarea consta como `task` `SUBTASK_COMPLETE`: 1 paso `TYPE_TEXT` con `decided_by = jev` (576 ms), 4,0 s y 0,00079 USD (aceptación 2). Antes ya había uso real: 76 tareas y 306 pasos del 10 al 14-10-2026, todos `jev`, con tiempo y coste. La prueba la hizo Claude con una sesión temporal del chat, con permiso de Pablo; el puente y el canal de mensajería de la evidencia parcial ya no existen.
 
 ### T13 — Ahorro de tokens y de turnos de Claude
 - Estado: verificada
