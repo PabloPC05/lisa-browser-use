@@ -173,6 +173,8 @@ class BitwardenCliVault:
         self._run("edit", "item", entry.id, stdin=base64.b64encode(json.dumps(item).encode()).decode())
 
     def certificates(self) -> list[StoredCertificate]:
+        # El baúl se sincroniza al abrirse; un certificado guardado después no se vería sin esto.
+        self._run("sync")
         try:
             return _certificates_of(json.loads(self._run("list", "items")))
         except ValueError as exc:
