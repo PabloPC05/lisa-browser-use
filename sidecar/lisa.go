@@ -106,18 +106,29 @@ func publicIP(ip net.IP) bool {
 		ip.IsMulticast() || ip.IsUnspecified() || ip.IsInterfaceLocalMulticast() || cgnat.Contains(ip))
 }
 
-// publicOnly se comprueba al conectar, con la dirección ya resuelta: una respuesta de DNS que
-// apunte a la red interna no sirve para colarse.
-func publicOnly(_, address string, _ syscall.RawConn) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return err
+// publicDialer rechaza conexiones a direcciones internas (se comprueba con la dirección ya
+// resuelta: una respuesta de DNS que apunte dentro no sirve para colarse). `allow` nombra
+// excepciones (host o host:puerto) y solo lo usan las pruebas, con su servidor en loopback;
+// en producción va vacío.
+func publicDialer(allow []string) func(string, string, syscall.RawConn) error {
+	allowed := map[string]bool{}
+	for _, a := range allow {
+		allowed[a] = true
 	}
-	ip := net.ParseIP(host)
-	if ip == nil || !publicIP(ip) {
-		return errNotPublic
+	return func(_, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return err
+		}
+		if allowed[address] || allowed[host] {
+			return nil
+		}
+		ip := net.ParseIP(host)
+		if ip == nil || !publicIP(ip) {
+			return errNotPublic
+		}
+		return nil
 	}
-	return nil
 }
 
 // targetMatches: `target` ("host:puerto") es uno de `hosts`, o está bajo una entrada ".sufijo:puerto".

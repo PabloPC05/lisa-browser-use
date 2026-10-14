@@ -89,8 +89,9 @@ func newProxy(cfg inMessage, desk desktop) (*proxy, error) {
 		mitm:     newConnListener(),
 	}
 	if len(peers) > 0 {
-		// El proxy no está en la máquina del navegador: solo conecta con direcciones públicas.
-		p.dialer.Control = publicOnly
+		// El proxy no está en la máquina del navegador: solo conecta con direcciones públicas
+		// (salvo las excepciones de prueba de cfg.AllowPrivateHosts).
+		p.dialer.Control = publicDialer(cfg.AllowPrivateHosts)
 	}
 	if len(cfg.Roots) > 0 {
 		p.roots = x509.NewCertPool()
