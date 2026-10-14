@@ -12,10 +12,12 @@ import os
 import subprocess
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 from urllib.parse import urlparse
 
 import tldextract
+
+from .certificate import StoredCertificate, is_certificate_file
 
 # Lista de sufijos incluida en el paquete: sin descargas en tiempo de ejecución.
 _extract = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
@@ -62,15 +64,48 @@ class Vault(Protocol):
     def set_password(self, entry: Entry, password: str) -> None:
         """Guarda `password` como contraseña de la entrada."""
 
+    def certificates(self) -> list[StoredCertificate]:
+        """Certificados digitales guardados: entradas con un adjunto `.p12` o `.pfx`."""
+
+    def attachment(self, item_id: str, attachment_id: str) -> bytes:
+        """Contenido de un adjunto."""
+
+
+# Campo propio de una entrada con la contraseña de su certificado. Si no lo hay, vale la
+# contraseña de la entrada.
+_CERT_PASSWORD_FIELDS = ("contraseña", "contrasena", "password", "clave", "pin")
+
+
+def _certificates_of(items: Sequence[dict]) -> list[StoredCertificate]:
+    found = []
+    for item in items:
+        fields = {str(f.get("name") or "").strip().lower(): str(f.get("value") or "") for f in item.get("fields") or ()}
+        password = next((fields[n] for n in _CERT_PASSWORD_FIELDS if fields.get(n)), "") or str(
+            (item.get("login") or {}).get("password") or ""
+        )
+        for att in item.get("attachments") or ():
+            if is_certificate_file(str(att.get("fileName") or "")):
+                found.append(StoredCertificate(
+                    item_id=item["id"], name=item.get("name") or "", attachment_id=str(att["id"]),
+                    file_name=str(att["fileName"]), password=password,
+                ))
+    return found
+
 
 class FakeVault:
     """Baúl en memoria para pruebas."""
 
-    def __init__(self, entries: Sequence[Entry] = (), *, codes: dict[str, str] | None = None, broken: bool = False):
+    def __init__(
+        self, entries: Sequence[Entry] = (), *, codes: dict[str, str] | None = None, broken: bool = False,
+        items: Sequence[dict] = (), files: dict[str, bytes] | None = None,
+    ):
         self.entries = list(entries)
         self.codes = dict(codes or {})
         self.broken = broken
         self.totp_calls = 0
+        # Entradas en el formato de `bw` (con `attachments`) y el contenido de cada adjunto.
+        self.items = list(items)
+        self.files = dict(files or {})
 
     def find(self, url: str) -> list[Entry]:
         if self.broken:
@@ -89,6 +124,14 @@ class FakeVault:
         if self.broken:
             raise VaultUnavailable("baúl de pruebas no disponible")
         self.entries = [replace(e, password=password) if e.id == entry.id else e for e in self.entries]
+
+    def certificates(self) -> list[StoredCertificate]:
+        if self.broken:
+            raise VaultUnavailable("baúl de pruebas no disponible")
+        return _certificates_of(self.items)
+
+    def attachment(self, item_id: str, attachment_id: str) -> bytes:
+        return self.files[attachment_id]
 
 
 class BitwardenCliVault:
@@ -129,6 +172,21 @@ class BitwardenCliVault:
         # La entrada cifrada en base64 entra por la entrada estándar, no como argumento.
         self._run("edit", "item", entry.id, stdin=base64.b64encode(json.dumps(item).encode()).decode())
 
+    def certificates(self) -> list[StoredCertificate]:
+        try:
+            return _certificates_of(json.loads(self._run("list", "items")))
+        except ValueError as exc:
+            raise VaultUnavailable("bw devolvió una respuesta que no es JSON") from exc
+
+    def attachment(self, item_id: str, attachment_id: str) -> bytes:
+        # Con --raw y sin --output, bw escribe el adjunto en la salida estándar: no toca el disco.
+        if self._session is None:
+            self._open()
+        return self._bw_call(
+            "get", "attachment", attachment_id, "--itemid", item_id, "--raw",
+            env={"BW_SESSION": self._session or ""}, binary=True,
+        )
+
     def _items(self, flag: str, value: str) -> list[Entry]:
         try:
             raw = json.loads(self._run("list", "items", flag, value))
@@ -164,7 +222,7 @@ class BitwardenCliVault:
             raise VaultUnavailable("bw no devolvió una sesión al abrir el baúl")
         self._bw_call("sync", env={"BW_SESSION": self._session})
 
-    def _bw_call(self, *args: str, env: dict[str, str] | None = None, stdin: str | None = None) -> str:
+    def _bw_call(self, *args: str, env: dict[str, str] | None = None, stdin: str | None = None, binary: bool = False) -> Any:
         environment = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": self._data_dir,
@@ -173,7 +231,7 @@ class BitwardenCliVault:
         }
         try:
             done = subprocess.run(
-                [self._bw, *args, "--nointeraction"], env=environment, capture_output=True, text=True,
+                [self._bw, *args, "--nointeraction"], env=environment, capture_output=True, text=not binary,
                 timeout=self._timeout_s, input=stdin,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:

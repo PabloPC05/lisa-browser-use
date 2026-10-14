@@ -10,6 +10,7 @@ from pathlib import Path
 from aiohttp import web
 from arc_cua.policies import ChoicePolicy
 
+from .certificate import Certificates, Sidecar
 from .files import Files
 from .jev import CommandCodeJevTransport
 from .journal import Journal
@@ -50,6 +51,23 @@ def main() -> None:
             master_password=_secret(v["master_password_file"]), data_dir=v["data_dir"], bw=v.get("bw", "bw"),
         )
 
+    certificates = None
+    if "certificate" in cfg:
+        # Proxy de certificados (certificate.py). Chromium manda por él los dominios de `domains`
+        # (lo decide su PAC, en la configuración del contenedor); con el certificado activo, los
+        # intercepta para presentar el certificado de Pablo.
+        c = cfg["certificate"]
+        domains = [d.strip(".").lower() for d in c["domains"]]
+        sidecar = Sidecar(
+            c["sidecar"], proxy_key_pem=Path(c["proxy_key_file"]).read_text(), listen=c["listen"],
+            allowed_peers=c.get("allowed_peers", ()), allowed_hosts=domains,
+        )
+        try:
+            sidecar.start()
+        except Exception:
+            logging.getLogger(__name__).exception("el proxy de certificados no arrancó; se reintenta al usarlo")
+        certificates = Certificates(sidecar, hosts=["." + d for d in domains])
+
     downloads, uploads = Path(paths["downloads"]), Path(paths["uploads"])
     executor = Executor(
         settings=Settings(
@@ -73,6 +91,7 @@ def main() -> None:
         vault=vault,
         usage=transport.usage,
         library=Library(paths.get("library") or Path(paths["journal"]).with_name("biblioteca.sqlite")),
+        certificates=certificates,
     )
     host, _, port = cfg.get("listen", "127.0.0.1:8787").partition(":")
     web.run_app(make_app(executor), host=host, port=int(port), print=None)

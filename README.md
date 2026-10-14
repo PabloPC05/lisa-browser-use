@@ -33,6 +33,8 @@ El paquete de Python sigue llamándose `lisa_browser`: es el nombre que usa el s
 | `gate.py` | Barrera de aprobaciones: clasifica cada acción (enviar, borrar, dinero) y pide permiso antes de ejecutarla |
 | `vault.py` | Baúl de contraseñas (Vaultwarden por `bw`) y coincidencia de dominios |
 | `login.py` | Inicio de sesión con el baúl, un solo intento, y segundo factor |
+| `certificate.py` | Certificado digital del baúl (`.p12`) para sedes electrónicas, presentado por el proxy de `sidecar/` |
+| `card.py` | Pago con tarjeta que Pablo da en el momento (tasas de trámites), con aprobación de dinero |
 | `files.py` | Adjuntar archivos, recoger descargas, listar y cerrar sesiones |
 | `library.py` | Biblioteca: sitios habituales y rutinas guardadas |
 | `journal.py` | Registro de operaciones en SQLite, sin secretos |
@@ -62,13 +64,26 @@ Sin memoria, cada gestión se redescubre: el planificador tantea direcciones y d
 
 Una rutina guarda el objetivo de cada paso, no los clics: JEV vuelve a decidir sobre la página de ese momento, así que aguanta cambios pequeños de la web. Si un paso no sale, se detiene y dice cuál. No guarda contraseñas (el paso `login` usa el baúl y se salta si la sesión sigue abierta) y no rodea la barrera: enviar, borrar o pagar siguen pidiendo permiso. Detalle en [PLAN §12](docs/PLAN.md).
 
+## Trámites: certificado digital y tasas
+
+Para hacer trámites en sedes electrónicas (propuesta en `lisa-assistant/docs/tramites.md`, LISA-70 a LISA-77).
+
+- **Certificado.** Chromium no puede elegir un certificado de cliente sin pantalla. Lo presenta un proxy en Go, `sidecar/`, tomado de [SpainAssist](https://github.com/MeLlamoPablo/SpainAssist) (MIT, ver `sidecar/NOTICE`):
+  - Chromium solo manda por él los dominios oficiales de la configuración, que decide su PAC.
+  - Con `login` y `method: "certificate"`, el ejecutor saca del baúl el adjunto `.p12`/`.pfx` y su contraseña (un campo «Contraseña» de la entrada, o la contraseña de la entrada). Durante 30 minutos el proxy presenta el certificado a esas sedes; aguanta la renegociación TLS 1.2 que usan algunas.
+  - La clave solo vive en memoria del ejecutor y del proxy.
+  - El proxy solo atiende al contenedor del navegador y nunca conecta con direcciones privadas, de loopback ni de Tailscale (`sidecar/lisa.go`).
+- **Tasas.** La operación `card` pide la tarjeta a Pablo como dato secreto (evento `secret` con `kind: "card"`), la rellena y pulsa pagar.
+  - JEV ve `[secret]` en el número y el CVV, y el registro los oculta.
+  - La aprobación de dinero muestra solo las cuatro últimas cifras, y las capturas ocultan los campos de tarjeta.
+
 ## Pruebas
 
 ```bash
 nix-shell --run "python -m unittest discover -s tests -t . -v"
 ```
 
-`shell.nix` trae Python con arc-cua y Chromium. Las pruebas no usan JEV ni internet: sirven su propio sitio web, arrancan Chromium sin interfaz y sustituyen al modelo por una política fijada. Si el entorno no permite el aislamiento de procesos de Chromium, `LISA_TEST_CHROME_ARGS="--no-sandbox"`.
+`shell.nix` trae Python con arc-cua, Chromium y el proxy de certificados compilado (`LISA_SIDECAR`). Las pruebas del proxy en sí: `cd sidecar && go test ./...`. Las pruebas no usan JEV ni internet: sirven su propio sitio web, arrancan Chromium sin interfaz y sustituyen al modelo por una política fijada. Si el entorno no permite el aislamiento de procesos de Chromium, `LISA_TEST_CHROME_ARGS="--no-sandbox"`.
 
 ## Despliegue
 

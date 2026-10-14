@@ -34,7 +34,7 @@ _STATUS_JS = (
 )
 
 
-# Durante la captura, el contenido de los campos de contraseña y de código se vuelve
+# Durante la captura, el contenido de los campos de contraseña, de código y de tarjeta se vuelve
 # transparente: ni siquiera se ve cuántos caracteres hay. Se hace con una hoja de estilos
 # construida desde el script, que funciona aunque la página prohíba estilos en línea.
 # No alcanza a los marcos de otro origen: ahí queda la ocultación normal del navegador.
@@ -43,6 +43,13 @@ _SECRET_FIELDS = (
     "input[autocomplete~=current-password]",
     "input[autocomplete~=new-password]",
     "input[autocomplete~=one-time-code]",
+    # Tarjetas de pago (card.py).
+    "input[autocomplete^=cc-number]",
+    "input[autocomplete^=cc-csc]",
+    "input[name*=card i]", "input[id*=card i]",
+    "input[name*=tarjeta i]", "input[id*=tarjeta i]",
+    "input[name*=cvv i]", "input[id*=cvv i]",
+    "input[name*=cvc i]", "input[id*=cvc i]",
 )
 _HIDDEN = (
     "color: transparent !important; -webkit-text-fill-color: transparent !important; "
