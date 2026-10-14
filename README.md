@@ -6,7 +6,7 @@ Trabajan dos modelos, y casi todo el coste está en el primero:
 
 | Quién | Qué decide | Coste |
 |---|---|---|
-| El planificador (Claude, en [lisa-agent](https://github.com/PabloPC05/lisa-agent) o en el puente de Telegram) | Qué página abrir y qué paso pedir | El del modelo grande, en cada llamada |
+| El planificador (Claude, en [lisa-agent](https://github.com/PabloPC05/lisa-agent), el agente del chat web de Lisa) | Qué página abrir y qué paso pedir | El del modelo grande, en cada llamada |
 | JEV, dentro de este servicio | Cada clic y cada tecla de un paso, sobre los elementos accesibles de la página, sin capturas | 0,042 $ por millón de tokens de entrada |
 
 Por eso todo lo que este servicio hace por sí solo, sin devolver el control al planificador, abarata la tarea.

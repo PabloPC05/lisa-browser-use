@@ -22,7 +22,7 @@ Fecha: 10-10-2026. Resultado de la entrevista con Pablo de ese día. **Aprobada 
 
 ## Problema
 
-Pablo habla con Lisa por Telegram. Lisa puede leer su memoria y archivos, pero no puede hacer nada en una página web: ni consultar un dato que exige navegar, ni entrar en una cuenta, ni descargar un documento, ni enviar un formulario. Pablo quiere pedírselo en el chat y que lo haga en un navegador propio de Lisa, rápido y con poco gasto de modelos.
+Pablo habla con Lisa en su chat web. Lisa puede leer su memoria y archivos, pero no puede hacer nada en una página web: ni consultar un dato que exige navegar, ni entrar en una cuenta, ni descargar un documento, ni enviar un formulario. Pablo quiere pedírselo en el chat y que lo haga en un navegador propio de Lisa, rápido y con poco gasto de modelos.
 
 ## Hechos comprobados
 
@@ -305,7 +305,7 @@ Detalles decididos por Claude dentro del alcance, reversibles: una sola tarea a 
 - **«Permitir siempre» en enviar y publicar:** un engaño posterior en ese sitio pasaría sin preguntar.
 - **Contraseñas escritas de forma automática y sesiones persistentes:** quien comprometiera el contenedor del navegador tendría las sesiones abiertas.
 - **Todo el baúl al alcance de Lisa:** la llave de todas las cuentas de Pablo vive en el servidor, no solo la de los sitios que Lisa usa.
-- **Códigos de segundo factor por Telegram**, cuyos chats con bots no van cifrados de extremo a extremo.
+- **Códigos de segundo factor por el chat**, que pasan por el servidor del chat antes de llegar al ejecutor.
 
 Riesgo sin evaluar: que algún sitio prohíba el acceso automatizado y suspenda la cuenta (ver «Bloqueado»).
 
