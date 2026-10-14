@@ -46,7 +46,7 @@ Dentro:
 - Descargar documentos y entregarlos por el chat; subir a una página archivos que Pablo haya enviado.
 - Gestiones que cambian algo: enviar formularios, publicar, borrar y operaciones de dinero, con aprobación.
 
-Fuera (ver «Exclusiones»): aplicaciones de escritorio, ver el navegador en vivo o tomar su control, y los dispositivos y navegadores personales de Pablo.
+Fuera (ver «Exclusiones»): aplicaciones de escritorio, tomar el control del navegador y los dispositivos y navegadores personales de Pablo. Verlo en vivo sí entra desde el 2026-10-14 (lisa-assistant D86).
 
 ## Requisitos
 
@@ -263,7 +263,7 @@ Aceptación:
 ## Exclusiones
 
 - **Computer Use** (aplicaciones de escritorio): tendrá su propia especificación.
-- **Ver el navegador en vivo o tomar su control.** El único canal es Telegram y ahí no es posible. Todo se resuelve con capturas, botones y respuestas en el chat.
+- **Tomar el control del navegador.** Queda para otra decisión. Verlo en vivo ya no está excluido: con el chat web (lisa-assistant D71) se puede, y está en lisa-assistant D86 (`GET /v1/screencast`, solo para mirar).
 - **Dispositivos y navegadores de Pablo**, Windows y macOS.
 - **Crear cuentas, cambiar contraseñas o cambiar la configuración del segundo factor** de un sitio.
 - **Resolver captchas con servicios externos** y ocultar la automatización.

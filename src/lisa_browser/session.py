@@ -132,8 +132,10 @@ def excerpt(text: str, *, max_chars: int = 4000, find: str = "", offset: int = 0
 
 
 class Browser:
-    def __init__(self, backend: ChromeBackend) -> None:
+    def __init__(self, backend: ChromeBackend, ws_url: str | None = None) -> None:
         self.backend = backend
+        #: Dirección WebSocket del navegador, para abrirle otra conexión (navegador en vivo).
+        self.ws_url = ws_url
 
     @classmethod
     def launch(
@@ -141,9 +143,10 @@ class Browser:
         user_data_dir: str | None = None,
     ) -> Browser:
         """Arranca un Chromium propio. Para pruebas; en producción se usa `connect`."""
-        return cls(ChromeBackend.launch(
+        backend = ChromeBackend.launch(
             headless=headless, executable=executable, extra_args=extra_args, user_data_dir=user_data_dir,
-        ))
+        )
+        return cls(backend, backend._process.ws_url if backend._process is not None else None)
 
     @classmethod
     def connect(cls, endpoint: str, *, locale: str = "", timezone: str = "") -> Browser:
@@ -155,7 +158,8 @@ class Browser:
         base = endpoint.rstrip("/")
         # Chromium lista las pestañas de la más reciente a la más antigua.
         pages = [t for t in httpx.get(base + "/json/list", timeout=5).json() if t.get("type") == "page"]
-        connection = CDPConnection(browser_ws_url(base))
+        ws_url = browser_ws_url(base)
+        connection = CDPConnection(ws_url)
         if pages:
             target_id = pages[0]["id"]
             for stale in pages[1:]:
@@ -165,7 +169,7 @@ class Browser:
                     log.debug("no se pudo cerrar la pestaña %s", stale.get("id"), exc_info=True)
         else:
             target_id = connection.call("Target.createTarget", {"url": "about:blank"})["targetId"]
-        browser = cls(ChromeBackend(connection, target_id))
+        browser = cls(ChromeBackend(connection, target_id), ws_url)
         browser.present_as_desktop(locale=locale, timezone=timezone)
         return browser
 
