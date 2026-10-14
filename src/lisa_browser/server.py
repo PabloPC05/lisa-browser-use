@@ -23,6 +23,8 @@ from typing import Any, Callable
 
 from aiohttp import web
 
+from .card import pay_with_card
+from .certificate import Certificates
 from .files import Files
 from .gate import ApprovalRequest, run_gated_subtask
 from .jev import Usage
@@ -37,9 +39,9 @@ log = logging.getLogger(__name__)
 
 OPS = (
     "open", "follow", "task", "read", "login", "save_password", "attach", "screenshot", "sessions", "logout", "log",
-    "routine",
+    "routine", "card",
 )
-_COLLECT_AFTER = ("open", "follow", "task", "login", "save_password", "routine")
+_COLLECT_AFTER = ("open", "follow", "task", "login", "save_password", "routine", "card")
 
 
 @dataclass(frozen=True)
@@ -136,6 +138,7 @@ class Executor:
         vault: Vault | None = None,
         usage: Usage | None = None,
         library: Library | None = None,
+        certificates: Certificates | None = None,
     ) -> None:
         self.settings = settings
         self._connect = connect
@@ -146,6 +149,7 @@ class Executor:
         self._vault = vault
         self._usage = usage
         self.library = library
+        self.certificates = certificates
         self._browser: Browser | None = None
         self._files: Files | None = None
         self._lock = threading.Lock()
@@ -248,18 +252,34 @@ class Executor:
             return {"status": "ok", "sessions": [s for s in self._journal.sessions() if s["domain"] in with_cookies]}
         if op == "logout":
             domain = str(args.get("domain") or "all")
+            if domain == "all" and self.certificates is not None:
+                self.certificates.deactivate()
             closed = files.logout(domain)
             self._journal.session_closed(None if domain == "all" else registrable_domain(domain))
             return {"status": "ok", "closed": closed}
-        if op == "task":
-            def approve(request: ApprovalRequest) -> str:
-                answer = operation.ask(
-                    "approval", self.settings.approval_seconds, category=request.category, domain=request.domain,
-                    action=request.action, fields=[list(f) for f in request.fields],
-                    png=base64.b64encode(request.png).decode(),
-                )
-                return answer if answer in ("once", "deny") else "expired"
+        def approve(request: ApprovalRequest) -> str:
+            answer = operation.ask(
+                "approval", self.settings.approval_seconds, category=request.category, domain=request.domain,
+                action=request.action, fields=[list(f) for f in request.fields],
+                png=base64.b64encode(request.png).decode(),
+            )
+            return answer if answer in ("once", "deny") else "expired"
 
+        if op == "card":
+            # La tarjeta la escribe Pablo en el chat: va del puente al ejecutor sin pasar por el agente.
+            result = pay_with_card(
+                browser, self._policy_for(operation), approve,
+                ask_card=lambda domain, timeout: operation.ask("secret", timeout, kind="card", domain=domain),
+                on_secret=lambda value: self._journal.add_secret(journal_id, value),
+                card_seconds=self.settings.code_seconds,
+                money_domains=self.settings.money_domains, domain_of=registrable_domain,
+                on_effect=lambda *effect: self._journal.effect(journal_id, *effect),
+                on_step=on_step, cancel=operation.cancel, usage=self._usage,
+                price_per_mtok=self.settings.price_per_mtok, limits=self.settings.limits,
+            )
+            result["page"] = _brief(result.get("page"))
+            return result
+        if op == "task":
             payload = {k: args[k] for k in ("goal", "verification", "inputs", "constraints", "max_actions") if k in args}
             result = run_gated_subtask(
                 browser, self._policy_for(operation), payload, approve,
@@ -274,6 +294,12 @@ class Executor:
             if find:
                 result.update(_text_of(browser.read(int(args.get("read_chars", 1500)), find=find)))
             return result
+        if op == "login" and args.get("method") == "certificate":
+            if self._vault is None or self.certificates is None:
+                return {"status": "certificate_unavailable", "reason": "no hay baúl o proxy de certificados configurado"}
+            # El certificado se activa para los dominios oficiales; entrar en la sede lo hace el planificador
+            # eligiendo «certificado electrónico» en su página de acceso.
+            return self.certificates.login(self._vault, str(args.get("account") or ""))
         if op in ("login", "save_password"):
             if self._vault is None:
                 return {"status": "vault_unavailable", "reason": "no hay baúl configurado"}
@@ -322,7 +348,7 @@ class Executor:
             op = step["op"]
             label = str(step.get("goal") or step.get("url") or step.get("text") or step.get("find") or op)[:80]
             operation.emit("step", n=n, action=f"rutina {n}/{len(steps)}: {op}", target=label, ms=0)
-            if op == "login" and not browser._eval(HAS_PASSWORD_JS):
+            if op == "login" and step.get("method") != "certificate" and not browser._eval(HAS_PASSWORD_JS):
                 # La sesión del sitio se conserva entre tareas: si la página no pide contraseña, ya está dentro.
                 continue
             args = {k: v for k, v in step.items() if k != "op"}

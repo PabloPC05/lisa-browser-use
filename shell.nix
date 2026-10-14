@@ -3,12 +3,14 @@
 { pkgs ? import <nixpkgs> { } }:
 let
   arc-cua = pkgs.callPackage ./nix/arc-cua.nix { };
-  python = pkgs.python3.withPackages (ps: [ arc-cua ps.aiohttp ps.httpx ps.h2 ps.websockets ps.tldextract ]);
+  sidecar = pkgs.callPackage ./nix/sidecar.nix { };
+  python = pkgs.python3.withPackages (ps: [ arc-cua ps.aiohttp ps.httpx ps.h2 ps.websockets ps.tldextract ps.cryptography ]);
 in
 pkgs.mkShell {
-  packages = [ python pkgs.chromium ];
+  packages = [ python pkgs.chromium pkgs.go ];
   shellHook = ''
     export PYTHONPATH=$PWD/src
     export ARC_CHROME=${pkgs.chromium}/bin/chromium
+    export LISA_SIDECAR=${sidecar}/bin/lisa-sidecar
   '';
 }

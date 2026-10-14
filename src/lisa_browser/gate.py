@@ -111,9 +111,14 @@ _CONTEXT_JS = r"""
     if (c.labels && c.labels.length) return text(c.labels[0].innerText.replace(c.value || "", ""));
     return text(c.getAttribute("aria-label") || c.getAttribute("placeholder") || c.getAttribute("name") || c.id);
   };
+  // Datos de tarjeta: en la aprobación solo se ven las cuatro últimas cifras del número.
+  const cardLike = (c) => /^cc-(number|csc)/.test(c.getAttribute("autocomplete") || "") ||
+    /card|tarjeta|\bpan\b|cvv|cvc|csc|cvv2|codigo.?seguridad/i.test([c.name, c.id, c.getAttribute("aria-label") || ""].join(" "));
   const valueOf = (c) => {
     const t = (c.getAttribute("type") || "").toLowerCase();
     if (t === "password") return c.value ? "••••" : "";
+    const digits = (c.value || "").replace(/[\s-]/g, "");
+    if (c.value && (cardLike(c) || /^\d{12,19}$/.test(digits))) return digits.length >= 12 ? "•••• " + digits.slice(-4) : "••••";
     if (t === "checkbox" || t === "radio") return c.checked ? "sí" : "";
     if (c.localName === "select") return text(c.selectedOptions[0] ? c.selectedOptions[0].innerText : "");
     return text(c.value);

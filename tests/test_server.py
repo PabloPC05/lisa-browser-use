@@ -24,11 +24,12 @@ from tests.test_files import FILE_PAGES, PDF, PHOTO
 from tests.test_gate import GATE_PAGES
 from tests.test_login import CODE, LOGIN_PAGES, PASSWORD, TYPE_AND_ENTER, TYPE_CODE, USER
 from tests.test_tasks import TASK_PAGES
+from tests.test_card import CARD_PAGES, CVV, NUMBER
 
 TOKEN = "token-de-prueba-abcdef"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 PAGES = {
-    **TASK_PAGES, **GATE_PAGES, **FILE_PAGES, **LOGIN_PAGES,
+    **TASK_PAGES, **GATE_PAGES, **FILE_PAGES, **LOGIN_PAGES, **CARD_PAGES,
     "/dentro": page("Tu carné", "<h1>Hola, Pablo</h1><script>document.cookie = 'sesion=1; path=/; max-age=3600'</script>"),
 }
 ENTRY = Entry("e1", "Biblioteca Socios", USER, PASSWORD, ("http://socios.test/login",))
@@ -367,3 +368,31 @@ class BrowserDown(ServerCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Tramites(ServerCase):
+    """Lo que añaden los trámites: tarjeta dada en el momento y certificado digital."""
+
+    async def test_card_is_asked_as_a_secret_and_never_reaches_the_journal(self) -> None:
+        await self.open("/pasarela")
+        self.steps(
+            "c1", ("TYPE_TEXT", "Número de tarjeta", "numero_tarjeta"), ("TYPE_TEXT", "Caducidad", "caducidad_mm_aa"),
+            ("TYPE_TEXT", "CVV", "cvv"), ("CLICK", "Pagar"),
+        )
+        events = await self.op("card", answers=[f"{NUMBER} 12/27 {CVV}", "once"])
+        secret = next(e for e in events if e["type"] == "secret")
+        self.assertEqual((secret["kind"], secret["domain"]), ("card", "127.0.0.1"))
+        approval = next(e for e in events if e["type"] == "approval")
+        self.assertEqual(approval["category"], "dinero")
+        self.assertIn(["Número de tarjeta", "•••• 0004"], approval["fields"])
+        self.assertEqual(len(self.site.posts("/pagado")), 1)
+        self.assertEqual(self.done(events)["status"], "NEEDS_AGENT")
+        everything = json.dumps(events, ensure_ascii=False).replace(approval["png"], "")
+        self.assertNotIn(NUMBER, everything)
+        self.assertNotIn(NUMBER, self.dump())
+        self.assertNotIn(f"'{CVV}'", self.dump())
+
+    async def test_certificate_login_without_a_proxy_says_so(self) -> None:
+        await self.open("/")
+        result = self.done(await self.op("login", {"method": "certificate"}))
+        self.assertEqual(result["status"], "certificate_unavailable")
