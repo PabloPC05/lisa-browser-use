@@ -50,7 +50,7 @@ lisa-av (máquina virtual)                          Lisa (servidor)
 │ Claude ──MCP http 127.0.0.1──► puente             │ lisa-browser (ejecutor, usuario propio)       │
 │ (lisa-agente)          (lisa-puente)──HTTP+token──┼─► API en 127.0.0.1:8787                       │
 │                           │                       │     ├─ CDP ─► contenedor lisa-navegador        │
-│                        Telegram                   │     ├─ bw ──► Vaultwarden 127.0.0.1:8222        │
+│                        canal                      │     ├─ bw ──► Vaultwarden 127.0.0.1:8222        │
 └───────────────────────────────────┘              │     └─ HTTPS ► Command Code (JEV)             │
                                                    └──────────────────────────────────────────────┘
 ```
@@ -83,7 +83,7 @@ Dependencias: `arc-cua[browser]==0.1.1` fijada por hash, `aiohttp`, `httpx`, `tl
 | Archivo | Cambio |
 |---|---|
 | `browser.py` (nuevo) | Cliente de la API del ejecutor y servidor MCP por HTTP en `127.0.0.1` con un token por sesión |
-| `channel.py`, `telegram.py` | `send_photo`, `send_file`, `delete_message`; `ask` acepta una imagen y dos o tres botones |
+| `channel.py` y el canal de mensajería | `send_photo`, `send_file`, `delete_message`; `ask` acepta una imagen y dos o tres botones |
 | `service.py` | Pasa el servidor MCP al crear o recuperar la sesión ACP; «respuesta secreta»: cuando el ejecutor pide un código, el siguiente mensaje de Pablo no se guarda ni se envía al agente y se borra del chat; `/cancelar` también cancela en el ejecutor |
 | `permissions.py`, `config.py` | `allow_tools`: las herramientas `browser_*` no piden permiso por sí mismas (lo pide la barrera del ejecutor). Reglas `navegador:enviar:<dominio>` para «Permitir siempre». Sección `[browser]` |
 
@@ -253,14 +253,14 @@ Lo que excluye la SPEC, y además: marcos de otro origen, arrastrar y soltar, va
 3. API del ejecutor.
 4. Puente: canal, respuesta secreta y servidor MCP, probado contra un ejecutor ficticio.
 5. Servidor: imagen, contenedor, servicio y cortafuegos por usuario.
-6. lisa-av: configuración e instrucciones. Primera tarea real por Telegram.
+6. lisa-av: configuración e instrucciones. Primera tarea real desde el chat.
 7. Baúl real y pruebas reales con Pablo.
 
 ## 11. Traducción de las aceptaciones
 
 Las pruebas automáticas usan un sitio local servido por las propias pruebas, Chromium sin interfaz, `ScriptedPolicy` en lugar de JEV y un baúl ficticio. Se ejecutan desde `packages/lisa-browser` con `PYTHONPATH=src python -m unittest <módulo> -v`, o desde `packages/lisa-bridge` las marcadas (puente).
 
-Las «pruebas reales» se hacen por Telegram con JEV, el contenedor y el baúl de verdad; su evidencia es el registro del ejecutor y lo que Pablo ve en el chat.
+Las «pruebas reales» se hacen desde el chat de Lisa con JEV, el contenedor y el baúl de verdad; su evidencia es el registro del ejecutor y lo que Pablo ve en el chat.
 
 | Aceptación | Prueba |
 |---|---|
@@ -299,7 +299,7 @@ Las «pruebas reales» se hacen por Telegram con JEV, el contenedor y el baúl d
 
 ## 12. Biblioteca: sitios y rutinas (R13, 12-10-2026)
 
-**Dónde vive.** En el ejecutor (`library.py`), en un SQLite propio junto al registro (`biblioteca.sqlite`; `paths.library` lo cambia). Está aquí y no en el agente porque es el ejecutor quien puede hacer una rutina entera sin el planificador, y porque así la comparten todos los canales (Telegram y la web).
+**Dónde vive.** En el ejecutor (`library.py`), en un SQLite propio junto al registro (`biblioteca.sqlite`; `paths.library` lo cambia). Está aquí y no en el agente porque es el ejecutor quien puede hacer una rutina entera sin el planificador, y porque así la comparten todos los canales (el chat web y la orden `lisa` del ordenador de Pablo).
 
 **Qué guarda.**
 
