@@ -10,10 +10,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from arc_cua import ActionKind
 from arc_cua.policies import ChoicePolicy
 
 from lisa_browser.journal import Journal
 from lisa_browser.login import login, save_password
+from lisa_browser.session import Browser
 from lisa_browser.vault import BitwardenCliVault, Entry, FakeVault, VaultUnavailable, registrable_domain
 from tests.site import Site, page
 from tests.support import ByName, launch_browser
@@ -68,6 +70,20 @@ LOGIN_PAGES = {
 ENTRY = Entry("e1", "Biblioteca Socios", USER, PASSWORD, ("http://socios.test/login",))
 TYPE_AND_ENTER = [("TYPE_TEXT", "Usuario", "usuario"), ("TYPE_TEXT", "Contraseña", "contraseña"), ("CLICK", "Entrar")]
 TYPE_CODE = [("TYPE_TEXT", "Código de verificación", "codigo"), ("CLICK", "Verificar")]
+TYPE_CODE_ELSEWHERE = [("TYPE_TEXT", "Código", "codigo"), ("CLICK", "Continuar")]
+
+
+def cut_after(browser: Browser, button: str) -> None:
+    """Corta la conexión con Chromium nada más pulsar `button`, como cuando la web pasa a otro proceso."""
+    backend = browser.backend
+    execute = backend.execute
+
+    def cutting(snapshot, action) -> None:
+        execute(snapshot, action)
+        if action.kind == ActionKind.CLICK and snapshot.element(action.target_id).name == button:
+            backend._conn.close()
+
+    backend.execute = cutting
 
 
 class LoginCase(unittest.TestCase):
@@ -223,7 +239,7 @@ class CodeFromChat(LoginCase):
 
 
 class CodeOnAnotherPage(LoginCase):
-    TYPE_CODE_HERE = [("TYPE_TEXT", "Código", "codigo"), ("CLICK", "Continuar")]
+    TYPE_CODE_HERE = TYPE_CODE_ELSEWHERE
 
     def test_a_code_page_that_arrives_later_is_not_taken_for_a_session(self) -> None:
         steps = TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)] + self.TYPE_CODE_HERE + [("SUBTASK_COMPLETE",)]
@@ -242,6 +258,66 @@ class CodeOnAnotherPage(LoginCase):
         result = self.login("/login-postal", TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)])
         self.assertEqual(result, {"status": "ok", "domain": "socios.test"})
         self.assertEqual(self.code_requests, [])
+
+
+class ConnectionCut(LoginCase):
+    """Como en Instagram: tras enviar el código la web pasa a otro proceso y se pierde la conexión con Chromium."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        # Se trabaja con una conexión aparte, que se puede cortar sin perder el Chromium de las pruebas.
+        cls.chromium = cls.browser
+        cls.browser = cls.connect()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.browser.close()
+        cls.browser = cls.chromium
+        super().tearDownClass()
+
+    @classmethod
+    def connect(cls) -> Browser:
+        return Browser.connect("http://" + cls.chromium.backend._process.ws_url.split("/")[2])
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.reconnects = 0
+
+    def reconnect(self) -> Browser:
+        self.reconnects += 1
+        type(self).browser = self.connect()
+        return self.browser
+
+    def test_a_session_opened_as_the_connection_drops_is_reported_as_open(self) -> None:
+        cut_after(self.browser, "Continuar")
+        steps = TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)] + TYPE_CODE_ELSEWHERE
+        with self.assertLogs("lisa_browser.login", "WARNING"):
+            result = self.login("/login-codigo-aparte", steps, reconnect=self.reconnect)
+        self.assertEqual(result, {"status": "ok", "domain": "socios.test", "recovered": True})
+        self.assertEqual((self.reconnects, self.code_requests), (1, [("socios.test", 300)]))
+        self.assertEqual(self.where(), "dentro")
+
+    def test_a_page_that_still_asks_for_the_code_is_said_and_nothing_is_typed_again(self) -> None:
+        self.codes = ["000000"]
+        cut_after(self.browser, "Continuar")
+        with self.assertLogs("lisa_browser.login", "WARNING"):
+            result = self.login("/codigo-aparte", TYPE_CODE_ELSEWHERE, reconnect=self.reconnect)
+        self.assertEqual(
+            result, {"status": "ERROR", "reason": "browser_unavailable", "domain": "socios.test", "asks": "code"},
+        )
+        self.assertEqual((self.secrets, len(self.code_requests)), (["000000"], 1))
+        self.assertEqual((self.where(), self.browser._eval("window.codigos")), ("codigo-aparte", 1))
+
+    def test_the_password_is_not_typed_again_after_the_cut(self) -> None:
+        wrong = FakeVault([Entry("e1", "Biblioteca Socios", USER, "equivocada-000", ("http://socios.test",))])
+        cut_after(self.browser, "Entrar")
+        with self.assertLogs("lisa_browser.login", "WARNING"):
+            result = self.login("/login", TYPE_AND_ENTER, vault=wrong, reconnect=self.reconnect)
+        self.assertEqual(
+            result, {"status": "ERROR", "reason": "browser_unavailable", "domain": "socios.test", "asks": "password"},
+        )
+        self.assertEqual((self.where(), self.browser._eval("window.intentos")), ("login", 1))
 
 
 class CodeFromVault(LoginCase):

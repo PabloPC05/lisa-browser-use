@@ -22,7 +22,9 @@ from tests.site import Site, page
 from tests.support import ByName, launch_browser
 from tests.test_files import FILE_PAGES, PDF, PHOTO
 from tests.test_gate import GATE_PAGES
-from tests.test_login import CODE, LOGIN_PAGES, PASSWORD, TYPE_AND_ENTER, TYPE_CODE, USER
+from tests.test_login import (
+    CODE, LOGIN_PAGES, PASSWORD, TYPE_AND_ENTER, TYPE_CODE, TYPE_CODE_ELSEWHERE, USER, cut_after,
+)
 from tests.test_tasks import TASK_PAGES
 from tests.test_card import CARD_PAGES, CVV, NUMBER
 
@@ -357,13 +359,39 @@ class LostConnection(ServerCase):
         self.assertEqual(self.done(events)["title"], "Horarios")
 
 
+class LoginCut(ServerCase):
+    """El inicio de sesión de Instagram: al enviar el código se pierde la conexión, pero la sesión queda iniciada."""
+
+    def connect(self):
+        browser = Browser.connect("http://" + self.browser.backend._process.ws_url.split("/")[2])
+        cut_after(browser, "Continuar")
+        return browser
+
+    async def test_a_session_opened_as_the_connection_drops_is_reported_and_recorded(self) -> None:
+        await self.open("/login-codigo-aparte", "socios.test")
+        self.steps("c1", *TYPE_AND_ENTER, ("SUBTASK_COMPLETE",), *TYPE_CODE_ELSEWHERE)
+        with self.assertLogs("lisa_browser.login", "WARNING"):
+            result = self.done(await self.op("login", answers=[CODE]))
+        self.assertEqual(
+            {k: result[k] for k in ("status", "domain", "recovered")},
+            {"status": "ok", "domain": "socios.test", "recovered": True},
+        )
+        journal = (await (await self.client.get("/v1/journal", headers=AUTH)).json())["operations"]
+        self.assertEqual((journal[-1]["op"], journal[-1]["status"], journal[-1]["sites"]), ("login", "ok", ["socios.test"]))
+        self.assertEqual([s["domain"] for s in self.done(await self.op("sessions"))["sessions"]], ["socios.test"])
+        await self.op("logout", {"domain": "socios.test"})
+
+
 class BrowserDown(ServerCase):
     def connect(self):
         raise OSError("sin contenedor")
 
     async def test_missing_browser_is_reported_and_nothing_else_is_tried(self) -> None:
-        events = await self.op("open", {"url": self.site.url("/")})
+        with self.assertLogs("lisa_browser.server", "WARNING") as logged:
+            events = await self.op("open", {"url": self.site.url("/")})
         self.assertEqual(self.done(events), {"status": "ERROR", "reason": "browser_unavailable"})
+        # El motivo queda en el registro del servicio, para saber la próxima vez qué pasó.
+        self.assertIn("sin contenedor", "\n".join(logged.output))
 
 
 if __name__ == "__main__":

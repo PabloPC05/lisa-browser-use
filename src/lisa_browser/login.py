@@ -6,6 +6,7 @@ de la página, se entrega a arc-cua como entrada secreta y se escribe una sola v
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from typing import Any, Callable, Mapping
@@ -16,6 +17,8 @@ from arc_cua import ActionKind
 from .runner import Limits, run_subtask
 from .session import Browser
 from .vault import Entry, Vault, VaultUnavailable, registrable_domain
+
+log = logging.getLogger(__name__)
 
 CODE_SECONDS = 300
 CODE_ATTEMPTS = 2
@@ -42,6 +45,8 @@ SETTLE_SECONDS = 4.0
 AskCode = Callable[[str, float], str | None]
 # ask_password(domain, username, timeout_seconds) -> contraseña nueva, o None si Pablo no contesta a tiempo.
 AskPassword = Callable[[str, str, float], str | None]
+# reconnect() -> el navegador, con la conexión rehecha si se perdió.
+Reconnect = Callable[[], Browser]
 
 
 class _SecondAttempt(Exception):
@@ -49,23 +54,37 @@ class _SecondAttempt(Exception):
 
 
 class _TypeOnce:
-    """Backend que deja escribir la contraseña una sola vez, para no bloquear la cuenta."""
+    """Backend que deja escribir la contraseña una sola vez, para no bloquear la cuenta.
 
-    def __init__(self, inner: Any, secret: str) -> None:
+    Anota también si ya se escribió la contraseña o el código: desde entonces, un corte de la
+    conexión no dice nada de si se entró, y hay que mirar cómo quedó la página.
+    """
+
+    def __init__(self, inner: Any, password: str) -> None:
         self._inner = inner
-        self._secret = secret
+        self.password = password
+        self.code = ""
         self.typed = False
+        self.code_typed = False
         self.second_attempt = False
+
+    @property
+    def sent(self) -> bool:
+        return self.typed or self.code_typed
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
     def execute(self, snapshot: Any, action: Any) -> None:
-        if action.kind == ActionKind.TYPE_TEXT and str(action.value) == self._secret:
-            if self.typed:
-                self.second_attempt = True
-                raise _SecondAttempt()
-            self.typed = True
+        if action.kind == ActionKind.TYPE_TEXT:
+            value = str(action.value)
+            if value == self.password:
+                if self.typed:
+                    self.second_attempt = True
+                    raise _SecondAttempt()
+                self.typed = True
+            elif self.code and value == self.code:
+                self.code_typed = True
         self._inner.execute(snapshot, action)
 
 
@@ -80,6 +99,7 @@ def login(
     limits: Limits = Limits(max_actions=12),
     code_seconds: float = CODE_SECONDS,
     account: str = "",
+    reconnect: Reconnect | None = None,
     **options: Any,
 ) -> dict[str, Any]:
     """Devuelve `{status, domain, reason?}`.
@@ -88,20 +108,20 @@ def login(
     `choose_account`. Este último llega con `accounts` cuando el baúl tiene varias cuentas
     para el sitio: no se escribe nada hasta que `account` (parte del usuario o del nombre
     de la entrada) señala una sola.
+
+    Si la conexión con Chromium se corta después de escribir la contraseña o el código, se
+    vuelve a conectar con `reconnect` y se mira la página: `ok` con `recovered` si ya no pide
+    nada, o `ERROR` con `asks` (`password` o `code`) si sigue pidiéndolo.
     """
     entry, domain, early = _entry_for(browser, vault, account)
     if entry is None:
         return early
-    if not _page_has(browser, HAS_PASSWORD_JS) and _asks_for_code(browser, {}):
-        # La web ya pide el código (la contraseña se envió antes, p. ej. en un intento que pasó a otra
-        # página): no se vuelve a escribir la contraseña, se pide el código.
-        return _second_factor(
-            browser, policy, vault, entry, domain, ask_code=ask_code, on_secret=on_secret, on_step=on_step,
-            limits=limits, code_seconds=code_seconds, **options,
-        )
-    return _sign_in(
-        browser, policy, vault, entry, entry.password, domain, ask_code=ask_code, on_secret=on_secret,
-        on_step=on_step, limits=limits, code_seconds=code_seconds, **options,
+    # Si la web ya pide el código (la contraseña se envió antes, p. ej. en un intento que pasó a otra
+    # página), no se vuelve a escribir la contraseña: se pide el código.
+    step = _second_factor if not _page_has(browser, HAS_PASSWORD_JS) and _asks_for_code(browser, {}) else _sign_in
+    return _guarded(
+        step, browser, policy, vault, entry, entry.password, domain, reconnect=reconnect, ask_code=ask_code,
+        on_secret=on_secret, on_step=on_step, limits=limits, code_seconds=code_seconds, **options,
     )
 
 
@@ -117,6 +137,7 @@ def save_password(
     limits: Limits = Limits(max_actions=12),
     code_seconds: float = CODE_SECONDS,
     account: str = "",
+    reconnect: Reconnect | None = None,
     **options: Any,
 ) -> dict[str, Any]:
     """Prueba una contraseña nueva que da Pablo y, solo si entra, la guarda en su entrada del baúl.
@@ -130,9 +151,9 @@ def save_password(
     password = ask_password(domain, entry.username, code_seconds)
     if not password:
         return {"status": "rejected", "domain": domain, "reason": "password_timeout"}
-    result = _sign_in(
-        browser, policy, vault, entry, password, domain, ask_code=ask_code, on_secret=on_secret,
-        on_step=on_step, limits=limits, code_seconds=code_seconds, **options,
+    result = _guarded(
+        _sign_in, browser, policy, vault, entry, password, domain, reconnect=reconnect, ask_code=ask_code,
+        on_secret=on_secret, on_step=on_step, limits=limits, code_seconds=code_seconds, **options,
     )
     if result["status"] != "ok":
         return result
@@ -168,14 +189,58 @@ def _entry_for(browser: Browser, vault: Vault, account: str) -> tuple[Entry | No
     return entries[0], domain, {}
 
 
+def _guarded(
+    step: Callable[..., dict[str, Any]], browser: Browser, policy: Any, vault: Vault, entry: Entry, password: str,
+    domain: str, *, reconnect: Reconnect | None, **kwargs: Any,
+) -> dict[str, Any]:
+    """Hace `step` (`_sign_in` o `_second_factor`) sin dar por fallido un inicio de sesión que solo se cortó.
+
+    Al pasar a la página siguiente (en Instagram, a otro proceso) la conexión con Chromium puede
+    perderse con la contraseña o el código ya enviados y la sesión iniciada.
+    """
+    backend = _TypeOnce(browser.backend, password)
+    try:
+        result = step(browser, backend, policy, vault, entry, domain, **kwargs)
+    except Exception:
+        if not backend.sent:
+            raise
+        log.warning("el inicio de sesión en %s se cortó tras escribir la contraseña o el código", domain, exc_info=True)
+        return _after_cut(browser, domain, reconnect)
+    if result["status"] != "ok" and backend.sent and not _page_has(browser, "true"):
+        # arc-cua se traga algunos fallos de conexión, y el paso acaba en un rechazo que no lo es.
+        log.warning("el inicio de sesión en %s acabó sin conexión con Chromium", domain)
+        return _after_cut(browser, domain, reconnect)
+    return result
+
+
+def _after_cut(browser: Browser, domain: str, reconnect: Reconnect | None) -> dict[str, Any]:
+    """Tras un corte, la página dice si la sesión quedó iniciada. Solo se mira: no se vuelve a escribir nada."""
+    if reconnect is not None:
+        browser = reconnect()
+    deadline = time.monotonic() + SETTLE_SECONDS
+    while not _page_has(browser, "document.readyState === 'complete'") and time.monotonic() < deadline:
+        time.sleep(0.5)
+    try:
+        asks_password = bool(browser._eval(HAS_PASSWORD_JS))
+        asks_code = not asks_password and bool(browser._eval(_HAS_CODE_JS))
+    except Exception:
+        return {"status": "ERROR", "reason": "browser_unavailable", "domain": domain}
+    if asks_password or asks_code:
+        return {
+            "status": "ERROR", "reason": "browser_unavailable", "domain": domain,
+            "asks": "password" if asks_password else "code",
+        }
+    return {"status": "ok", "domain": domain, "recovered": True}
+
+
 def _sign_in(
-    browser: Browser, policy: Any, vault: Vault, entry: Entry, password: str, domain: str, *,
+    browser: Browser, backend: _TypeOnce, policy: Any, vault: Vault, entry: Entry, domain: str, *,
     ask_code: AskCode, on_secret: Callable[[str], None] | None, on_step: Callable[[dict], None] | None,
     limits: Limits, code_seconds: float, **options: Any,
 ) -> dict[str, Any]:
+    password = backend.password
     if on_secret is not None:
         on_secret(password)
-    backend = _TypeOnce(browser.backend, password)
     result = run_subtask(
         backend, policy,
         {
@@ -196,8 +261,8 @@ def _sign_in(
     while True:
         if _asks_for_code(browser, result):
             return _second_factor(
-                browser, policy, vault, entry, domain, ask_code=ask_code, on_secret=on_secret, on_step=on_step,
-                limits=limits, code_seconds=code_seconds, **options,
+                browser, backend, policy, vault, entry, domain, ask_code=ask_code, on_secret=on_secret,
+                on_step=on_step, limits=limits, code_seconds=code_seconds, **options,
             )
         if time.monotonic() >= deadline:
             break
@@ -238,7 +303,7 @@ def _asks_for_code(browser: Browser, result: Mapping[str, Any]) -> bool:
 
 
 def _second_factor(
-    browser: Browser, policy: Any, vault: Vault, entry: Entry, domain: str, *,
+    browser: Browser, backend: _TypeOnce, policy: Any, vault: Vault, entry: Entry, domain: str, *,
     ask_code: AskCode, on_secret: Callable[[str], None] | None, on_step: Callable[[dict], None] | None,
     limits: Limits, code_seconds: float, **options: Any,
 ) -> dict[str, Any]:
@@ -248,8 +313,9 @@ def _second_factor(
             return {"status": "rejected", "domain": domain, "reason": "code_timeout"}
         if on_secret is not None:
             on_secret(code)
+        backend.code = code
         result = run_subtask(
-            browser.backend, policy,
+            backend, policy,
             {
                 "goal": "Introducir el código de verificación y continuar.",
                 "verification": ["La página ya no pide el código de verificación."],
