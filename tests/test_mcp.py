@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
+from unittest import mock
 
 import httpx
 from mcp import types
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from lisa_browser.library import Library
+from lisa_browser import mcp_server
 from lisa_browser.mcp_server import BearerAuth, BrowserMcp, Rules
 from lisa_browser.server import Operation, Settings
 
@@ -206,12 +210,94 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.data(done)["status"], "done")
         self.assertEqual(self.data(cannot)["status"], "cannot")
 
+    async def test_no_keepalive_without_forms(self) -> None:
+        _, browser = self.make(lambda op: {"ok": True})
+        logs: list[Any] = []
+
+        async def on_log(params: types.LoggingMessageNotificationParams) -> None:
+            logs.append(params.data)
+
+        with mock.patch.object(mcp_server, "KEEPALIVE_SECONDS", 0.05):
+            async with create_connected_server_and_client_session(browser.mcp._mcp_server, logging_callback=on_log) as client:
+                await client.call_tool("open", {"url": "https://ejemplo.es"})
+                await client.call_tool("user_step", {"instructions": "Aprueba en Cl@ve"})
+                await asyncio.sleep(0.1)
+        self.assertEqual(logs, [])
+
     async def test_tool_names(self) -> None:
         _, browser = self.make(lambda op: {})
         names = {t.name for t in await browser.mcp.list_tools()}
         self.assertEqual(names, {
             "open", "follow", "task", "read", "login", "save_password", "card", "attach", "screenshot", "sessions",
             "logout", "log", "routine", "library", "boe_search", "official_site", "user_step"})
+
+
+class FakeContext:
+    """Lo que `_ask` usa del contexto de una llamada. El cliente en memoria del SDK no sirve aquí: no lee
+    avisos mientras su formulario está abierto, y el envío del servidor se queda esperando."""
+
+    def __init__(self, answer_after: float, token: str | None = "p1") -> None:
+        self.answer_after = answer_after
+        self.request_id = "7"
+        self.request_context = SimpleNamespace(meta=SimpleNamespace(progressToken=token))
+        self.session = self
+        self.sent: list[tuple[str, Any, Any]] = []
+
+    async def elicit(self, message: str, schema: type) -> Any:
+        await asyncio.sleep(self.answer_after)
+        return SimpleNamespace(action="accept", data=schema(hecho=True))
+
+    async def log(self, level: str, message: str, *, logger_name: str | None = None) -> None:
+        self.sent.append(("log", self.request_id, message))
+
+    async def send_log_message(self, level: str, data: Any, logger: str | None = None,
+                               related_request_id: Any = None) -> None:
+        self.sent.append(("log", related_request_id, data))
+
+    async def send_progress_notification(self, token: Any, progress: float, total: float | None = None,
+                                         message: str | None = None, related_request_id: Any = None) -> None:
+        self.sent.append(("progress", related_request_id, progress))
+
+
+class KeepaliveTests(unittest.IsolatedAsyncioTestCase):
+    """Sin tráfico, Claude Code corta la llamada a los 300 s: mientras Pablo no contesta van avisos."""
+
+    def setUp(self) -> None:
+        patcher = mock.patch.object(mcp_server, "KEEPALIVE_SECONDS", 0.05)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    async def test_notices_while_form_is_pending_and_stop_after(self) -> None:
+        ctx = FakeContext(answer_after=0.3)
+        answer = await mcp_server._ask(ctx, "Haz un paso", mcp_server.Paso, 5.0)  # type: ignore[arg-type]
+        self.assertTrue(answer.hecho)
+        progress = [value for kind, _, value in ctx.sent if kind == "progress"]
+        self.assertGreaterEqual(len(progress), 3)
+        self.assertEqual(progress, sorted(set(progress)), "el número de progreso siempre crece")
+        logs = [(related, text) for kind, related, text in ctx.sent if kind == "log"]
+        self.assertEqual({text for _, text in logs}, {mcp_server.WAITING_TEXT})
+        # Por la respuesta de la llamada y, sin ligar, por el flujo GET.
+        self.assertEqual({related for related, _ in logs}, {"7", None})
+        self.assertTrue(all(related == "7" for kind, related, _ in ctx.sent if kind == "progress"))
+        count = len(ctx.sent)
+        await asyncio.sleep(0.2)
+        self.assertEqual(len(ctx.sent), count, "los avisos paran al contestar")
+
+    async def test_progress_continues_the_operation_count(self) -> None:
+        ctx = FakeContext(answer_after=0.12)
+        progress = mcp_server.Progress(ctx)  # type: ignore[arg-type]
+        await progress.report("click Enviar")
+        await mcp_server._ask(ctx, "¿Lo permites?", mcp_server.Paso, 5.0, progress)  # type: ignore[arg-type]
+        await progress.report("click Aceptar")
+        values = [value for kind, _, value in ctx.sent if kind == "progress"]
+        self.assertGreaterEqual(len(values), 3)
+        self.assertEqual(values, list(range(1, len(values) + 1)))
+
+    async def test_without_progress_token_only_logs(self) -> None:
+        ctx = FakeContext(answer_after=0.12, token=None)
+        await mcp_server._ask(ctx, "Haz un paso", mcp_server.Paso, 5.0)  # type: ignore[arg-type]
+        self.assertTrue(ctx.sent)
+        self.assertEqual({kind for kind, _, _ in ctx.sent}, {"log"})
 
 
 class BearerTests(unittest.IsolatedAsyncioTestCase):

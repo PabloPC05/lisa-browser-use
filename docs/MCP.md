@@ -24,7 +24,7 @@ agente ──► mcp.example.com (Caddy, puerta con clave) ──► agentgatewa
 
 | Evento | Qué hace el MCP |
 |---|---|
-| `step`, `queued` | Aviso de progreso al cliente, si lo pidió |
+| `step`, `queued` | Aviso de progreso al cliente, si lo pidió, por la respuesta de la llamada |
 | `approval` | Formulario «¿Lo permites?». Con enviar, además «permitir siempre en este sitio» (regla `navegador:enviar:<dominio>` en `reglas.json`; nunca para borrar ni dinero). No contestar, rechazar o dejarlo sin marcar es `deny`. Si el cliente no admite formularios, también |
 | `secret` | Formulario con el código, la tarjeta (número, caducidad y CVV) o la contraseña nueva. Si no contesta, no se envía nada y el ejecutor lo da por caducado |
 | `screenshot` | La imagen va en el resultado |
@@ -54,7 +54,7 @@ Las descripciones y las pautas (`INSTRUCTIONS`) vienen de lisa-agent (`src/tools
 - **Clientes sin formularios.** El 17-10-2026, Claude Code los muestra en la terminal; claude.ai y Claude Desktop no los admiten todavía. Con ellos se puede leer y navegar, pero todo lo que pida permiso o un código termina en `DENIED`, sin hacerse.
 - **Los formularios no llevan la captura**: solo texto (acción, dominio y campos rellenos). Si Pablo quiere verla antes de aprobar, el agente puede pedir `screenshot`.
 - **Los datos sensibles van en formulario normal.** La especificación de MCP prefiere el modo URL para eso, pero Claude Code no lo anunciaba bien en la versión de octubre; se usa el modo formulario, con lo que el código o la tarjeta pasan por el cliente (nunca por el modelo ni por el registro del ejecutor).
-- **Una operación larga mantiene abierta la llamada** hasta que termina (como mucho `operation_seconds`, más lo que tarde Pablo en contestar). Si el cliente corta, la operación se cancela en el siguiente paso.
+- **Una llamada larga solo sobrevive si le llega algo cada pocos minutos.** La llamada sigue abierta hasta que la operación termina (como mucho `operation_seconds`, más lo que tarde Pablo en contestar), pero Claude Code es Node y su `fetch` (undici) corta una respuesta que pasa 300 s sin recibir nada (`bodyTimeout`, error `UND_ERR_BODY_TIMEOUT`). El SDK manda un «ping» de SSE cada 15 s, pero agentgateway no los reenvía. Así que, mientras un formulario espera respuesta, `_ask` manda cada 30 s (`KEEPALIVE_SECONDS`) «Esperando a que Pablo conteste el formulario». Lo manda como aviso de progreso, si el cliente lo pidió, y como mensaje de registro (`info`), los dos por la respuesta de la llamada. Además, otro mensaje de registro sin ligar a la llamada va por el flujo GET de la sesión, que se corta igual. Los avisos paran en cuanto Pablo contesta, rechaza o el formulario caduca. Comprobado el 17-10-2026 con un cliente Node, sin contestar a `user_step`: por `https://mcp.example.com/todo/mcp` y sin estos avisos se cortaron la llamada y el GET a los 300 s justos. Con un agentgateway 1.6.0 de prueba delante del código nuevo, los tres avisos llegaron y la llamada pasó de los 400 s. Fuera de los formularios no hay estos avisos: una operación que pase 300 s sin pasos (por ejemplo, en cola detrás de otra que espera a Pablo) se corta igual si el cliente no pidió progreso. Si el cliente corta, la operación se cancela en el siguiente paso.
 - **Un reinicio del MCP único o de este servicio corta las sesiones abiertas**: el cliente tiene que reconectarse.
 
 ## Despliegue
