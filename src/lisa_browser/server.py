@@ -189,6 +189,7 @@ class Executor:
         except Exception as exc:
             if self._browser_is_dead():
                 # Chromium dejó de responder: la siguiente operación vuelve a conectar.
+                log.warning("la operación %s falló sin conexión con Chromium", operation.op, exc_info=True)
                 self._browser = self._files = None
                 result = {"status": "ERROR", "reason": "browser_unavailable"}
             else:
@@ -318,7 +319,9 @@ class Executor:
                 ask_code=lambda domain, timeout: operation.ask("secret", timeout, kind="code", domain=domain),
                 on_secret=lambda value: self._journal.add_secret(journal_id, value),
                 on_step=on_step, code_seconds=self.settings.code_seconds, cancel=operation.cancel, usage=self._usage,
-                account=str(args.get("account") or ""), **options,
+                account=str(args.get("account") or ""),
+                # Si la conexión se corta con la contraseña o el código ya enviados, se rehace para ver si se entró.
+                reconnect=self._ensure_browser, **options,
             )
             if result["status"] == "ok":
                 self._journal.session_opened(result["domain"])
@@ -361,6 +364,7 @@ class Executor:
             if op in ("open", "follow") and not wants_text:
                 args["read_chars"] = 0
             result = self._dispatch(operation, journal_id, op, args)
+            browser = self._ensure_browser()  # un inicio de sesión cortado pudo rehacer la conexión
             if not _step_ok(op, result):
                 status = str(result.get("status") or "failed")
                 self.library.ran(name, False, status)
