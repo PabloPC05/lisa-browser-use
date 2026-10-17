@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import threading
+import time
 import unittest
+from unittest import mock
 
 import httpx
+from websockets.exceptions import ConnectionClosed
 
-from lisa_browser.session import Browser, excerpt
+from lisa_browser.session import Browser, Connection, excerpt
 from tests.site import Site, page
 from tests.support import launch_browser
 
@@ -189,6 +193,84 @@ class Excerpt(unittest.TestCase):
         last = excerpt("0123456789", max_chars=4, offset=8)
         self.assertEqual((last["text"], last["truncated"]), ("89", False))
         self.assertNotIn("next_offset", last)
+
+
+class ConnectionSurvives(SessionCase):
+    """La conexión con Chromium no se cae con una página activa y, si se cae, se rehace sola."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        # Keepalive y recogida de eventos en décimas de segundo, para no esperar 40 s.
+        cls._patches = [
+            mock.patch.object(Connection, "ping_interval", 0.5),
+            mock.patch.object(Connection, "ping_timeout", 1.0),
+            mock.patch.object(Connection, "drain_every_s", 0.2),
+        ]
+        for patch in cls._patches:
+            patch.start()
+        super().setUpClass()
+        cls.site.pages["/activa"] = page(
+            "Activa", "<p>Página con actividad</p><script>setInterval(() => fetch('/horarios?' + Date.now()), 20)</script>"
+        )
+        cls.site.pages["/lento"] = page("Lento", "<p>lento</p>")
+        cls.browser.present_as_desktop(locale="es-ES", timezone="Europe/Madrid")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        super().tearDownClass()
+        for patch in cls._patches:
+            patch.stop()
+
+    def test_a_busy_page_left_alone_does_not_drop_the_connection(self) -> None:
+        # Sin leerlos, los eventos de la página llenan la cola de websockets y el keepalive cierra
+        # la conexión («1011 keepalive ping timeout»): es lo que pasaba esperando un código.
+        self.browser.open(self.site.url("/activa"))
+        socket = self.browser.backend._conn._ws
+        time.sleep(4)
+        self.assertTrue(self.browser.backend._conn.is_open())
+        self.assertIs(self.browser.backend._conn._ws, socket)
+        self.assertEqual(self.browser.read()["title"], "Activa")
+
+    def test_a_dropped_connection_returns_to_the_same_tab_with_the_same_backend(self) -> None:
+        self.browser.open(self.site.url("/horarios"))
+        backend, target = self.browser.backend, self.browser.backend.target_id
+        backend._conn._ws.close()
+        read = self.browser.read()
+        self.assertEqual((read["title"], self.browser.backend, backend.target_id), ("Horarios", backend, target))
+        # La pestaña se sigue presentando como de escritorio.
+        self.assertNotIn("Headless", self.browser._eval("navigator.userAgent"))
+        self.assertEqual(self.browser._eval("navigator.language"), "es-ES")
+        # Una orden que no se puede repetir también sale por la conexión nueva: la vieja no llegó a enviarla.
+        backend._conn._ws.close()
+        self.assertTrue(self.browser.open(self.site.url("/"))["ok"])
+        # Y lo que usa arc-cua por su cuenta.
+        backend._conn._ws.close()
+        self.assertEqual(backend.observe().context["title"], "Biblioteca municipal")
+        self.assertEqual(len([t for t in httpx.get(self.endpoint() + "/json/list").json() if t["type"] == "page"]), 1)
+
+    def test_a_read_cut_while_waiting_is_repeated_and_anything_else_is_not(self) -> None:
+        self.browser.open(self.site.url("/lento"))
+        slow = "new Promise(done => setTimeout(() => done(document.title), 1000))"
+        threading.Timer(0.3, self.browser.backend._conn._ws.close).start()
+        self.assertEqual(self.browser._eval(slow), "Lento")
+        threading.Timer(0.3, self.browser.backend._conn._ws.close).start()
+        with self.assertRaises(ConnectionClosed):
+            self.browser._call("Runtime.evaluate", {"expression": slow, "awaitPromise": True})
+        self.assertEqual(self.browser.read()["title"], "Lento")
+
+    def test_moving_to_another_origin_keeps_the_tab_and_the_reads(self) -> None:
+        self.browser.open(self.site.url("/horarios"))
+        target = self.browser.backend.target_id
+        for host in ("banco.test", "otro.test", "127.0.0.1"):
+            self.browser._eval(f"setTimeout(() => location.href = {self.site.url('/', host)!r}, 10)")
+            deadline = time.monotonic() + 5
+            while not self.browser.read()["url"].startswith(f"http://{host}:") and time.monotonic() < deadline:
+                pass
+            self.assertEqual(self.browser.read()["title"], "Biblioteca municipal")
+        self.assertEqual(self.browser.backend.target_id, target)
+
+    def endpoint(self) -> str:
+        return "http://" + self.browser.ws_url.split("/")[2]
 
 
 class MissingPage(SessionCase):
