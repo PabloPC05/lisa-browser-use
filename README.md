@@ -98,7 +98,7 @@ nix-shell --run "python -m unittest discover -s tests -t . -v"
 
 Corre en el servidor de Lisa como el servicio `lisa-browser`, junto a un Chromium en un contenedor; lo define `hosts/lisa/navegador.nix` del repositorio [lisa](https://github.com/PabloPC05/lisa). Solo escucha en `127.0.0.1:8787` (la API) y `127.0.0.1:8789` (el MCP), y cada petición lleva un token.
 
-Desde el 12-10-2026 el servicio ejecuta este repositorio, clonado en `/srv/lisa/lisa-browser-use` con una clave de solo lectura (`~/.ssh/github_lisa_browser_use_deploy`). Actualizarlo:
+Desde el 12-10-2026 el servicio ejecuta este repositorio, clonado en `/srv/lisa/lisa-browser-use` (desde el 17-10-2026, del repositorio público por HTTPS, sin clave). Actualizarlo:
 
 ```bash
 git -C /srv/lisa/lisa-browser-use pull && sudo systemctl restart lisa-browser
