@@ -9,6 +9,14 @@ cdp_endpoint = "http://172.30.0.2:9222"
 # Sitios donde se pregunta por defecto ante cualquier botón no reconocido como inofensivo.
 money_domains = []
 
+# El MCP del navegador (mcp_server.py), el destino `browser` del MCP único. Sin esta sección no se sirve.
+[mcp]
+listen = "127.0.0.1:8789"
+# Clave que presenta el MCP único. Si falta, la misma que la API (`token_file`).
+# token_file = "/run/credentials/lisa-browser.service/mcp-token"
+# Permisos permanentes («permitir siempre» enviar en un dominio). Por defecto, `reglas.json` junto al registro.
+# rules = "/var/lib/lisa-browser/reglas.json"
+
 [jev]
 base_url = "https://api.commandcode.ai/provider/v1/systemone"
 model = "typesafe/jev"
