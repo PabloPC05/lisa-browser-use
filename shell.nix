@@ -4,7 +4,7 @@
 let
   arc-cua = pkgs.callPackage ./nix/arc-cua.nix { };
   sidecar = pkgs.callPackage ./nix/sidecar.nix { };
-  python = pkgs.python3.withPackages (ps: [ arc-cua ps.aiohttp ps.httpx ps.h2 ps.websockets ps.tldextract ps.cryptography ]);
+  python = pkgs.python3.withPackages (ps: [ arc-cua ps.aiohttp ps.httpx ps.h2 ps.websockets ps.tldextract ps.cryptography ps.mcp ]);
 in
 pkgs.mkShell {
   packages = [ python pkgs.chromium pkgs.go ];

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import tomllib
 from pathlib import Path
@@ -94,7 +95,37 @@ def main() -> None:
         certificates=certificates,
     )
     host, _, port = cfg.get("listen", "127.0.0.1:8787").partition(":")
-    web.run_app(make_app(executor), host=host, port=int(port), print=None)
+    if "mcp" not in cfg:
+        web.run_app(make_app(executor), host=host, port=int(port), print=None)
+        return
+    # Con [mcp], el mismo proceso sirve también el MCP del navegador (mcp_server.py), que llama
+    # directamente al ejecutor: misma cola, misma barrera y mismo registro.
+    m = cfg["mcp"]
+    asyncio.run(_serve_with_mcp(
+        executor, host, int(port), m.get("listen", "127.0.0.1:8789"),
+        token=_secret(m["token_file"]) if "token_file" in m else executor.settings.token,
+        rules=Path(m.get("rules") or Path(paths["journal"]).with_name("reglas.json")),
+    ))
+
+
+async def _serve_with_mcp(executor: Executor, host: str, port: int, mcp_listen: str, *, token: str, rules: Path) -> None:
+    import uvicorn
+
+    from .mcp_server import BrowserMcp, Rules, make_asgi_app
+
+    runner = web.AppRunner(make_app(executor))
+    await runner.setup()
+    await web.TCPSite(runner, host, port).start()
+    mcp_host, _, mcp_port = mcp_listen.partition(":")
+    browser_mcp = BrowserMcp(executor, Rules(rules), host=mcp_host, port=int(mcp_port))
+    server = uvicorn.Server(uvicorn.Config(
+        make_asgi_app(browser_mcp, token), host=mcp_host, port=int(mcp_port), log_level="warning", lifespan="on",
+    ))
+    try:
+        # uvicorn atiende SIGTERM y SIGINT: al pararse, se cierra también la API.
+        await server.serve()
+    finally:
+        await runner.cleanup()
 
 
 if __name__ == "__main__":
