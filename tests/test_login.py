@@ -204,6 +204,28 @@ class WrongDomain(LoginCase):
         self.assertEqual(result["status"], "no_credentials")
 
 
+class PasswordGoesToThePasswordField(LoginCase):
+    def test_the_password_field_gets_the_password_whatever_the_model_picks(self) -> None:
+        # Como en Microsoft: la etiqueta lleva el usuario oculto y el modelo elige la entrada equivocada.
+        steps = [("TYPE_TEXT", "Usuario", "usuario"), ("TYPE_TEXT", "Contraseña", "usuario"), ("CLICK", "Entrar"),
+                 ("SUBTASK_COMPLETE",)]
+        result = self.login("/login", steps)
+        self.assertEqual(result, {"status": "ok", "domain": "socios.test"})
+        self.assertEqual(self.where(), "dentro")
+
+    def test_the_password_is_never_typed_in_a_visible_field(self) -> None:
+        steps = [("TYPE_TEXT", "Usuario", "contraseña"), ("CLICK", "Entrar"), ("SUBTASK_COMPLETE",)]
+        result = self.login("/login", steps)
+        self.assertEqual(result, {"status": "rejected", "domain": "socios.test", "reason": "password_wrong_field"})
+        self.assertEqual(self.browser._eval("document.querySelector('#usuario').value"), "")
+        self.assertEqual(self.browser._eval("window.intentos"), 0)
+
+    def test_a_password_that_was_not_typed_is_not_a_rejected_password(self) -> None:
+        result = self.login("/login", [("TYPE_TEXT", "Usuario", "usuario"), ("SUBTASK_COMPLETE",)])
+        self.assertEqual(result, {"status": "rejected", "domain": "socios.test", "reason": "password_not_typed"})
+        self.assertEqual(self.browser._eval("window.intentos"), 0)
+
+
 class SingleAttempt(LoginCase):
     def test_rejected_password_is_tried_only_once(self) -> None:
         wrong = FakeVault([Entry("e1", "Biblioteca Socios", USER, "equivocada-000", ("http://socios.test",))])
