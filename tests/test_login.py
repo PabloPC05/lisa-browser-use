@@ -43,8 +43,22 @@ def login_page(after_password: str) -> str:
     )
 
 
+# Como Instagram: tras la contraseña, la web pasa un momento después a otra página que pide el código,
+# y el campo solo lo dice en su etiqueta.
+_CODE_ELSEWHERE = page(
+    "Revisa tu correo",
+    "<h1>Revisa tu correo</h1><form id='g'><label>Código <input id='c1' name='email' type='text'></label>"
+    "<button type='submit'>Continuar</button></form><p id='m2'></p><script>window.codigos = 0;"
+    "g.addEventListener('submit', (ev) => { ev.preventDefault(); window.codigos += 1;"
+    f" if (c1.value === '{CODE}') {{ location.href = '/dentro'; }} else {{ m2.textContent = 'Código incorrecto'; }} }});</script>",
+)
+
 LOGIN_PAGES = {
     "/login": login_page("location.href = '/dentro';"),
+    "/login-codigo-aparte": login_page("setTimeout(() => { location.href = '/codigo-aparte'; }, 1500);"),
+    "/codigo-aparte": _CODE_ELSEWHERE,
+    "/login-postal": login_page("location.href = '/perfil';"),
+    "/perfil": page("Tu perfil", "<h1>Tu perfil</h1><label>Código postal <input id='cp' type='text'></label>"),
     "/login-codigo": login_page(_VERIFY),
     "/login-codigo-sin-marca": login_page(_VERIFY.replace("autocomplete='one-time-code'", "name='code'")),
     "/dentro": page("Tu carné", "<h1>Hola, Pablo</h1><p>Tu carné caduca el 31 de diciembre.</p>"),
@@ -206,6 +220,28 @@ class CodeFromChat(LoginCase):
         self.assertEqual(result, {"status": "rejected", "domain": "socios.test", "reason": "code"})
         self.assertEqual(len(self.code_requests), 2)
         self.assertEqual(self.browser._eval("window.codigos"), 2)
+
+
+class CodeOnAnotherPage(LoginCase):
+    TYPE_CODE_HERE = [("TYPE_TEXT", "Código", "codigo"), ("CLICK", "Continuar")]
+
+    def test_a_code_page_that_arrives_later_is_not_taken_for_a_session(self) -> None:
+        steps = TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)] + self.TYPE_CODE_HERE + [("SUBTASK_COMPLETE",)]
+        result = self.login("/login-codigo-aparte", steps)
+        self.assertEqual(result, {"status": "ok", "domain": "socios.test"})
+        self.assertEqual(self.code_requests, [("socios.test", 300)])
+        self.assertEqual(self.where(), "dentro")
+
+    def test_on_the_code_page_the_code_is_asked_without_typing_the_password(self) -> None:
+        result = self.login("/codigo-aparte", self.TYPE_CODE_HERE + [("SUBTASK_COMPLETE",)])
+        self.assertEqual(result, {"status": "ok", "domain": "socios.test"})
+        self.assertEqual(self.secrets, [CODE])
+        self.assertEqual(self.where(), "dentro")
+
+    def test_a_postal_code_is_not_a_second_factor(self) -> None:
+        result = self.login("/login-postal", TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)])
+        self.assertEqual(result, {"status": "ok", "domain": "socios.test"})
+        self.assertEqual(self.code_requests, [])
 
 
 class CodeFromVault(LoginCase):

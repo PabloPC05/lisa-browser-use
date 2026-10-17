@@ -7,6 +7,7 @@ de la página, se entrega a arc-cua como entrada secreta y se escribe una sola v
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
@@ -22,10 +23,20 @@ CODE_ATTEMPTS = 2
 _CODE_FIELD = re.compile(r"c[oó]digo|code|otp|verificaci[oó]n|sms|token|2fa|autenticaci[oó]n|clave temporal", re.I)
 HAS_PASSWORD_JS = "[...document.querySelectorAll('input[type=password]')].some((e) => e.offsetParent !== null)"
 # Muchos sitios (Amazon entre ellos) no marcan el campo con autocomplete=one-time-code: se mira también su nombre.
+# Otros (Instagram) solo lo dicen en la etiqueta, «Código»; un código postal o promocional no cuenta.
 _HAS_CODE_JS = (
-    "[...document.querySelectorAll('input:not([type=hidden]):not([type=password])')].some((e) => e.offsetParent !== null && ("
-    "e.autocomplete === 'one-time-code' || [e.name, e.id].some((s) => /^(code|c[oó]digo)$|otp|one.?time|verif|2fa|mfa/i.test(s))))"
+    "[...document.querySelectorAll('input:not([type=hidden]):not([type=password])')].some((e) => {"
+    " if (e.offsetParent === null) return false;"
+    " if (e.autocomplete === 'one-time-code') return true;"
+    " if ([e.name, e.id].some((s) => /^(code|c[oó]digo)$|otp|one.?time|verif|2fa|mfa/i.test(s))) return true;"
+    " const label = [e.getAttribute('aria-label'), e.placeholder, ...[...(e.labels || [])].map((l) => l.textContent)].join(' ');"
+    " return /c[oó]digo|\\bcode\\b|verificaci[oó]n|verification/i.test(label)"
+    "   && !/postal|promo|descuento|cup[oó]n|regalo|referido|referral|coupon|zip/i.test(label);"
+    "})"
 )
+#: Tras enviar la contraseña, cuánto se espera a que la web cambie de página: algunas (Instagram) piden
+#: el código en otra página que llega un momento después.
+SETTLE_SECONDS = 4.0
 
 # ask_code(domain, timeout_seconds) -> código, o None si Pablo no contesta a tiempo.
 AskCode = Callable[[str, float], str | None]
@@ -81,6 +92,13 @@ def login(
     entry, domain, early = _entry_for(browser, vault, account)
     if entry is None:
         return early
+    if not _page_has(browser, HAS_PASSWORD_JS) and _asks_for_code(browser, {}):
+        # La web ya pide el código (la contraseña se envió antes, p. ej. en un intento que pasó a otra
+        # página): no se vuelve a escribir la contraseña, se pide el código.
+        return _second_factor(
+            browser, policy, vault, entry, domain, ask_code=ask_code, on_secret=on_secret, on_step=on_step,
+            limits=limits, code_seconds=code_seconds, **options,
+        )
     return _sign_in(
         browser, policy, vault, entry, entry.password, domain, ask_code=ask_code, on_secret=on_secret,
         on_step=on_step, limits=limits, code_seconds=code_seconds, **options,
@@ -172,14 +190,29 @@ def _sign_in(
     if backend.second_attempt:
         return {"status": "rejected", "domain": domain, "reason": "password"}
 
-    if _asks_for_code(browser, result):
-        return _second_factor(
-            browser, policy, vault, entry, domain, ask_code=ask_code, on_secret=on_secret, on_step=on_step,
-            limits=limits, code_seconds=code_seconds, **options,
-        )
-    if backend.typed and not browser._eval(HAS_PASSWORD_JS):
+    # La web puede tardar en pasar a la página siguiente: se mira un rato si pide un código antes de
+    # decidir, para no dar por iniciada una sesión que espera el segundo factor.
+    deadline = time.monotonic() + SETTLE_SECONDS
+    while True:
+        if _asks_for_code(browser, result):
+            return _second_factor(
+                browser, policy, vault, entry, domain, ask_code=ask_code, on_secret=on_secret, on_step=on_step,
+                limits=limits, code_seconds=code_seconds, **options,
+            )
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+    if backend.typed and not _page_has(browser, HAS_PASSWORD_JS, default=True):
         return {"status": "ok", "domain": domain}
     return {"status": "rejected", "domain": domain, "reason": "password"}
+
+
+def _page_has(browser: Browser, script: str, *, default: bool = False) -> bool:
+    """Evalúa una comprobación en la página; mientras cambia de página puede fallar, y vale `default`."""
+    try:
+        return bool(browser._eval(script))
+    except Exception:
+        return default
 
 
 def _without_entry(browser: Browser, vault: Vault, url: str, domain: str) -> dict[str, Any]:
@@ -201,7 +234,7 @@ def _asks_for_code(browser: Browser, result: Mapping[str, Any]) -> bool:
     field = result.get("needs_input") or {}
     if result.get("status") == "NEEDS_INPUT" and _CODE_FIELD.search(str(field.get("name") or "")):
         return True
-    return bool(browser._eval(_HAS_CODE_JS))
+    return _page_has(browser, _HAS_CODE_JS)
 
 
 def _second_factor(
