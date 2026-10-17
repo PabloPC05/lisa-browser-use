@@ -52,6 +52,8 @@ MARGIN_SECONDS = 15.0
 #: corta la llamada a los 300 s, y agentgateway no reenvía los «ping» de SSE del SDK.
 KEEPALIVE_SECONDS = 30.0
 WAITING_TEXT = "Esperando a que Pablo conteste el formulario"
+#: Lo mismo cuando la operación lleva KEEPALIVE_SECONDS sin novedades (en la cola, o un paso largo).
+WORKING_TEXT = "El navegador sigue trabajando"
 
 # Parámetros comunes. A nivel de módulo: FastMCP resuelve las anotaciones con los globales del módulo.
 Find = Annotated[str | None, Field(description="Términos separados por comas; devuelve solo los fragmentos que los contienen")]
@@ -155,13 +157,20 @@ async def _keepalive(ctx: Context, progress: Progress) -> None:
     """
     while True:
         await anyio.sleep(KEEPALIVE_SECONDS)
-        try:
-            await progress.report(WAITING_TEXT)
-            await ctx.log("info", WAITING_TEXT, logger_name="navegador")
-            await ctx.session.send_log_message("info", WAITING_TEXT, logger="navegador")
-        except Exception as exc:  # noqa: BLE001 - si el cliente ya no está, lo dirá el formulario
-            log.debug("no se pudo avisar de la espera: %s", exc)
+        if not await _notify(ctx, progress, WAITING_TEXT):
             return
+
+
+async def _notify(ctx: Context, progress: Progress, text: str) -> bool:
+    """Un aviso por la respuesta de la llamada y por el flujo GET de la sesión. False si el cliente ya no está."""
+    try:
+        await progress.report(text)
+        await ctx.log("info", text, logger_name="navegador")
+        await ctx.session.send_log_message("info", text, logger="navegador")
+        return True
+    except Exception as exc:  # noqa: BLE001 - si el cliente ya no está, lo dirá la propia llamada
+        log.debug("no se pudo avisar al cliente: %s", exc)
+        return False
 
 
 async def _ask(ctx: Context, message: str, schema: type[BaseModel], seconds: float,
@@ -235,7 +244,12 @@ class BrowserMcp:
         progress = Progress(ctx)
         try:
             while True:
-                event = await operation.events.get()
+                try:
+                    event = await asyncio.wait_for(operation.events.get(), KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    # Sin novedades: un aviso para que el cliente no corte una llamada callada.
+                    await _notify(ctx, progress, WORKING_TEXT)
+                    continue
                 kind = event["type"]
                 if kind == "queued":
                     await progress.report("Hay otra tarea de navegador en curso; esta espera su turno.")

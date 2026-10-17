@@ -6,6 +6,7 @@ import asyncio
 import base64
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -217,12 +218,31 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         async def on_log(params: types.LoggingMessageNotificationParams) -> None:
             logs.append(params.data)
 
-        with mock.patch.object(mcp_server, "KEEPALIVE_SECONDS", 0.05):
+        # Una operación que contesta antes del plazo no avisa de nada.
+        with mock.patch.object(mcp_server, "KEEPALIVE_SECONDS", 2.0):
             async with create_connected_server_and_client_session(browser.mcp._mcp_server, logging_callback=on_log) as client:
                 await client.call_tool("open", {"url": "https://ejemplo.es"})
                 await client.call_tool("user_step", {"instructions": "Aprueba en Cl@ve"})
                 await asyncio.sleep(0.1)
         self.assertEqual(logs, [])
+
+    async def test_a_quiet_operation_keeps_the_call_alive(self) -> None:
+        # En la cola o en un paso largo no hay eventos: también se avisa, para que el cliente no corte.
+        def slow(operation: Operation) -> dict[str, Any]:
+            time.sleep(0.4)
+            return {"ok": True}
+
+        _, browser = self.make(slow)
+        logs: list[Any] = []
+
+        async def on_log(params: types.LoggingMessageNotificationParams) -> None:
+            logs.append(params.data)
+
+        with mock.patch.object(mcp_server, "KEEPALIVE_SECONDS", 0.1):
+            async with create_connected_server_and_client_session(browser.mcp._mcp_server, logging_callback=on_log) as client:
+                result = await client.call_tool("open", {"url": "https://ejemplo.es"})
+        self.assertEqual(self.data(result), {"ok": True})
+        self.assertGreaterEqual(logs.count(mcp_server.WORKING_TEXT), 2)
 
     async def test_tool_names(self) -> None:
         _, browser = self.make(lambda op: {})
