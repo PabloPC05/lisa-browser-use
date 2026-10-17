@@ -48,6 +48,12 @@ MAX_EMBED_BYTES = 10 * 1024 * 1024
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 #: Margen para contestar al ejecutor antes de que su propio plazo venza.
 MARGIN_SECONDS = 15.0
+#: Cada cuánto se avisa al cliente mientras espera un formulario. Sin tráfico, Claude Code (Node, undici)
+#: corta la llamada a los 300 s, y agentgateway no reenvía los «ping» de SSE del SDK.
+KEEPALIVE_SECONDS = 30.0
+WAITING_TEXT = "Esperando a que Pablo conteste el formulario"
+#: Lo mismo cuando la operación lleva KEEPALIVE_SECONDS sin novedades (en la cola, o un paso largo).
+WORKING_TEXT = "El navegador sigue trabajando"
 
 # Parámetros comunes. A nivel de módulo: FastMCP resuelve las anotaciones con los globales del módulo.
 Find = Annotated[str | None, Field(description="Términos separados por comas; devuelve solo los fragmentos que los contienen")]
@@ -125,8 +131,59 @@ class Paso(BaseModel):
     hecho: bool = Field(default=False, description="Marca si ya lo has hecho; déjalo sin marcar si no puedes")
 
 
-async def _ask(ctx: Context, message: str, schema: type[BaseModel], seconds: float) -> BaseModel | str:
+class Progress:
+    """Avisos de progreso de una llamada, si el cliente los pidió. MCP exige que el número crezca."""
+
+    def __init__(self, ctx: Context) -> None:
+        self.ctx = ctx
+        self.count = 0
+
+    async def report(self, message: str) -> None:
+        meta = self.ctx.request_context.meta
+        token = meta.progressToken if meta else None
+        if token is None:
+            return
+        self.count += 1
+        # Ligado a la llamada, para que vaya por su misma respuesta (ctx.report_progress no lo liga).
+        await self.ctx.session.send_progress_notification(
+            token, self.count, message=message, related_request_id=self.ctx.request_id)
+
+
+async def _keepalive(ctx: Context, progress: Progress) -> None:
+    """Mientras Pablo no contesta, un aviso cada KEEPALIVE_SECONDS para que la conexión no se quede callada.
+
+    Va por la respuesta de la llamada (progreso, si lo pidió, y un mensaje de registro) y, sin ligar a
+    ella, por el flujo GET de la sesión, que el cliente también cierra si no le llega nada.
+    """
+    while True:
+        await anyio.sleep(KEEPALIVE_SECONDS)
+        if not await _notify(ctx, progress, WAITING_TEXT):
+            return
+
+
+async def _notify(ctx: Context, progress: Progress, text: str) -> bool:
+    """Un aviso por la respuesta de la llamada y por el flujo GET de la sesión. False si el cliente ya no está."""
+    try:
+        await progress.report(text)
+        await ctx.log("info", text, logger_name="navegador")
+        await ctx.session.send_log_message("info", text, logger="navegador")
+        return True
+    except Exception as exc:  # noqa: BLE001 - si el cliente ya no está, lo dirá la propia llamada
+        log.debug("no se pudo avisar al cliente: %s", exc)
+        return False
+
+
+async def _ask(ctx: Context, message: str, schema: type[BaseModel], seconds: float,
+               progress: Progress | None = None) -> BaseModel | str:
     """Formulario a Pablo. El modelo de datos si acepta; si no, «declined», «expired» o «unsupported»."""
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(_keepalive, ctx, progress or Progress(ctx))
+        answer = await _elicit(ctx, message, schema, seconds)
+        tg.cancel_scope.cancel()
+    return answer
+
+
+async def _elicit(ctx: Context, message: str, schema: type[BaseModel], seconds: float) -> BaseModel | str:
     try:
         with anyio.fail_after(max(5.0, seconds)):
             answer = await ctx.elicit(message=message, schema=schema)
@@ -184,20 +241,24 @@ class BrowserMcp:
         work = loop.run_in_executor(self.pool, self.executor.run, operation)
         images: list[str] = []
         result: dict[str, Any] = {}
-        steps = 0
+        progress = Progress(ctx)
         try:
             while True:
-                event = await operation.events.get()
+                try:
+                    event = await asyncio.wait_for(operation.events.get(), KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    # Sin novedades: un aviso para que el cliente no corte una llamada callada.
+                    await _notify(ctx, progress, WORKING_TEXT)
+                    continue
                 kind = event["type"]
                 if kind == "queued":
-                    await ctx.report_progress(steps, message="Hay otra tarea de navegador en curso; esta espera su turno.")
+                    await progress.report("Hay otra tarea de navegador en curso; esta espera su turno.")
                 elif kind == "step":
-                    steps += 1
-                    await ctx.report_progress(steps, message=f"{str(event['action']).lower()} {event['target'] or ''}".strip())
+                    await progress.report(f"{str(event['action']).lower()} {event['target'] or ''}".strip())
                 elif kind == "approval":
-                    operation.answer(event["event"], await self._approve(ctx, event))
+                    operation.answer(event["event"], await self._approve(ctx, event, progress))
                 elif kind == "secret":
-                    operation.answer(event["event"], await self._secret(ctx, event))
+                    operation.answer(event["event"], await self._secret(ctx, event, progress))
                 elif kind == "screenshot":
                     images.append(event["png"])
                 elif kind == "done":
@@ -210,7 +271,7 @@ class BrowserMcp:
         await work
         return self._content(result, images)
 
-    async def _approve(self, ctx: Context, event: dict[str, Any]) -> str:
+    async def _approve(self, ctx: Context, event: dict[str, Any], progress: Progress) -> str:
         category, domain = str(event.get("category")), str(event.get("domain"))
         rule = f"navegador:enviar:{domain}"
         if category == "enviar" and self.rules.has(rule):
@@ -218,7 +279,8 @@ class BrowserMcp:
         lines = [f"El navegador quiere hacer esto en {domain} ({CATEGORY_TEXT.get(category, category)}):", str(event.get("action"))]
         lines += [f"{label}: {value}" for label, value in event.get("fields") or ()]
         schema = PermitirEnviar if category == "enviar" else Permitir
-        answer = await _ask(ctx, "\n".join(lines), schema, self.executor.settings.approval_seconds - MARGIN_SECONDS)
+        answer = await _ask(ctx, "\n".join(lines), schema, self.executor.settings.approval_seconds - MARGIN_SECONDS,
+                           progress)
         if isinstance(answer, str):
             return "expired" if answer == "expired" else "deny"
         if not answer.permitir:
@@ -227,20 +289,21 @@ class BrowserMcp:
             self.rules.add(rule, str(event.get("action")))
         return "once"
 
-    async def _secret(self, ctx: Context, event: dict[str, Any]) -> str | None:
+    async def _secret(self, ctx: Context, event: dict[str, Any], progress: Progress) -> str | None:
         kind, domain = event.get("kind"), str(event.get("domain"))
         seconds = self.executor.settings.code_seconds - MARGIN_SECONDS
         if kind == "card":
             message = (f"{domain} pide pagar con tarjeta. Los datos van directos al navegador: el agente no los ve "
                        "y no se guardan. Pagar te pedirá permiso aparte.")
-            answer = await _ask(ctx, message, Tarjeta, seconds)
+            answer = await _ask(ctx, message, Tarjeta, seconds, progress)
             return f"{answer.numero} {answer.caducidad} {answer.cvv}" if isinstance(answer, Tarjeta) else None
         if kind == "password":
             message = (f"Contraseña nueva para {event.get('username') or 'tu cuenta'} en {domain}. Se prueba una vez "
                        "y, si entra, se guarda en el baúl. El agente no la ve.")
-            answer = await _ask(ctx, message, Contrasena, seconds)
+            answer = await _ask(ctx, message, Contrasena, seconds, progress)
             return answer.contrasena if isinstance(answer, Contrasena) else None
-        answer = await _ask(ctx, f"{domain} pide un código de verificación. No se guarda y el agente no lo ve.", Codigo, seconds)
+        answer = await _ask(ctx, f"{domain} pide un código de verificación. No se guarda y el agente no lo ve.", Codigo,
+                            seconds, progress)
         return answer.codigo.strip() if isinstance(answer, Codigo) else None
 
     def _content(self, result: dict[str, Any], images: list[str]) -> list[types.ContentBlock]:
