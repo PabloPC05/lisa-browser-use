@@ -28,7 +28,7 @@ agente ──► mcp.example.com (Caddy, puerta con clave) ──► agentgatewa
 | `approval` | Formulario «¿Lo permites?». Con enviar, además «permitir siempre en este sitio» (regla `navegador:enviar:<dominio>` en `reglas.json`; nunca para borrar ni dinero). No contestar, rechazar o dejarlo sin marcar es `deny`. Si el cliente no admite formularios, también |
 | `secret` | Formulario con el código, la tarjeta (número, caducidad y CVV) o la contraseña nueva. Si no contesta, no se envía nada y el ejecutor lo da por caducado |
 | `screenshot` | La imagen va en el resultado |
-| `done` | El resultado, en JSON compacto y sin `metrics` (siguen en `log`). Las descargas de hasta 10 MB van dentro como recurso; las mayores se quedan en el servidor |
+| `done` | El resultado, en JSON compacto y sin `metrics` (siguen en `log`). Las descargas de hasta 10 MB van además dentro como recurso. Todas se guardan en el servidor (ver «Descargas») |
 
 Los formularios caducan 15 s antes que el plazo del ejecutor (`approval_seconds`, `code_seconds`), para que el ejecutor reciba siempre una respuesta.
 
@@ -42,12 +42,17 @@ Los formularios caducan 15 s antes que el plazo del ejecutor (`approval_seconds`
 | `card` | Pagar una tasa con la tarjeta que Pablo escribe en el formulario |
 | `attach` | Adjuntar un archivo que el agente manda en base64 o por una URL https de internet (hasta 100 MB) |
 | `screenshot`, `sessions`, `logout`, `log` | Captura, sesiones abiertas, cerrar sesión y registro |
+| `downloads` | Las descargas guardadas en el servidor, de la más reciente a la más antigua |
 | `routine`, `library` | Rutinas y sitios guardados |
 | `boe_search`, `official_site`, `user_step` | Trámites: buscar la norma en el BOE, comprobar que una sede es oficial y pedir a Pablo un paso a mano (Cl@ve, app del banco, captcha) |
 
 `attach` solo descarga de direcciones https públicas (nada de la red de casa, Tailscale ni el propio servidor) y sin seguir redirecciones.
 
 Las descripciones y las pautas (`INSTRUCTIONS`) vienen de lisa-agent (`src/tools/browser.ts`, `library.ts` y `tramites.ts`, commit 556fd39), adaptadas a cualquier agente. `tramites.py` porta su lista de 212 sedes oficiales y su cliente del BOE, que a su vez venían de SpainAssist.
+
+## Descargas
+
+Decisión de Pablo (17-10-2026): todas las descargas se quedan en el servidor, en una carpeta aparte, y él dirá después qué hacer con cada una. El ejecutor las saca de la carpeta que comparte con el contenedor del navegador y las lleva a `saved_downloads` (por defecto `/var/lib/lisa-browser/descargas`, que ninguna web alcanza), con la fecha delante del nombre y una ficha `.json` al lado (nombre original, tamaño, dirección de la que salió y hora). `downloads` las lista. No hay enlaces para bajarlas desde fuera: harían falta una ruta pública nueva, y Pablo dijo que no era necesario.
 
 ## Límites conocidos
 

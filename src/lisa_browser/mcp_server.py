@@ -311,7 +311,7 @@ class BrowserMcp:
         blocks: list[types.ContentBlock] = []
         delivered = []
         for item in result.pop("downloads", None) or ():
-            entry = {"name": item["name"], "bytes": item["bytes"]}
+            entry = {"name": item["name"], "bytes": item["bytes"], "saved_as": item.get("saved_as")}
             path = self.executor.download_path(item["id"])
             if path is not None and path.is_file() and item["bytes"] <= MAX_EMBED_BYTES:
                 mime = mimetypes.guess_type(item["name"])[0] or "application/octet-stream"
@@ -321,7 +321,7 @@ class BrowserMcp:
                 )))
                 entry["sent"] = True
             else:
-                entry.update(sent=False, reason=f"pasa de {MAX_EMBED_BYTES // 2**20} MB: se queda en el servidor")
+                entry.update(sent=False, reason=f"pasa de {MAX_EMBED_BYTES // 2**20} MB: solo queda guardada en el servidor")
             delivered.append(entry)
         if delivered:
             result["downloads"] = delivered
@@ -513,6 +513,14 @@ class BrowserMcp:
                 return self._json({"deleted": lib.delete_routine(name)})
             except LibraryError as exc:
                 return self._json({"status": "invalid", "reason": str(exc)})
+
+        @mcp.tool(name="downloads", structured_output=False, description=(
+            "Lista las descargas guardadas en el servidor, de la más reciente a la más antigua: archivo, nombre "
+            "original, tamaño, web de la que salió y fecha. Todas las descargas se guardan ahí (las de hasta 10 MB "
+            "llegan además en el resultado de la operación); Pablo dirá qué hacer con ellas."))
+        async def downloads(limit: Annotated[int, Field(ge=1, le=200)] = 30) -> list[types.ContentBlock]:
+            return self._json({"status": "ok", "downloads": await anyio.to_thread.run_sync(
+                lambda: self.executor.saved_downloads(limit))})
 
         @mcp.tool(name="boe_search", structured_output=False, description=(
             "Busca legislación consolidada en el BOE (leyes, reales decretos, órdenes) por palabras del título (por "
