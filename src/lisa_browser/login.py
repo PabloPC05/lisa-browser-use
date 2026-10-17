@@ -6,6 +6,7 @@ de la página, se entrega a arc-cua como entrada secreta y se escribe una sola v
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 import time
@@ -53,6 +54,18 @@ class _SecondAttempt(Exception):
     pass
 
 
+class _WrongField(Exception):
+    pass
+
+
+def _is_password_field(snapshot: Any, target_id: str | None) -> bool:
+    """Si el elemento al que va la acción es un campo `input type=password`."""
+    for element in getattr(snapshot, "elements", ()) or ():
+        if element.id == target_id:
+            return (element.metadata or {}).get("type") == "password"
+    return False
+
+
 class _TypeOnce:
     """Backend que deja escribir la contraseña una sola vez, para no bloquear la cuenta.
 
@@ -67,6 +80,7 @@ class _TypeOnce:
         self.typed = False
         self.code_typed = False
         self.second_attempt = False
+        self.wrong_field = False
 
     @property
     def sent(self) -> bool:
@@ -78,6 +92,17 @@ class _TypeOnce:
     def execute(self, snapshot: Any, action: Any) -> None:
         if action.kind == ActionKind.TYPE_TEXT:
             value = str(action.value)
+            to_password_field = _is_password_field(snapshot, action.target_id)
+            if to_password_field and value != self.password and not (self.code and value == self.code):
+                # Qué secreto va en el campo de contraseña lo decide el código, no el modelo: con el
+                # usuario oculto como [secret] en la etiqueta («Escribe la contraseña para [secret]»)
+                # podía escribir el usuario donde iba la contraseña.
+                action = dataclasses.replace(action, value=self.password)
+                value = self.password
+            if value == self.password and not to_password_field:
+                # La contraseña nunca va a un campo a la vista (usuario, búsqueda, un mensaje...).
+                self.wrong_field = True
+                raise _WrongField()
             if value == self.password:
                 if self.typed:
                     self.second_attempt = True
@@ -269,6 +294,11 @@ def _sign_in(
         time.sleep(0.5)
     if backend.typed and not _page_has(browser, HAS_PASSWORD_JS, default=True):
         return {"status": "ok", "domain": domain}
+    if not backend.typed:
+        # No es que la web rechazara la contraseña: no se llegó a escribir (no encontró el campo,
+        # o quiso escribirla donde no tocaba). Se puede volver a intentar sin gastar el intento.
+        reason = "password_wrong_field" if backend.wrong_field else "password_not_typed"
+        return {"status": "rejected", "domain": domain, "reason": reason}
     return {"status": "rejected", "domain": domain, "reason": "password"}
 
 
