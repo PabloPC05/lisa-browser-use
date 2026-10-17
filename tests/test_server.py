@@ -66,6 +66,7 @@ class ServerCase(unittest.IsolatedAsyncioTestCase):
             files_for=lambda browser: Files(browser, tmp / "descargas", tmp / "subidas"),
             uploads_dir=tmp / "subidas",
             vault=FakeVault([ENTRY]),
+            saved_downloads_dir=tmp / "guardadas",
         )
         self.client = TestClient(TestServer(make_app(self.executor)))
         await self.client.start_server()
@@ -344,6 +345,15 @@ class FilesOverHttp(ServerCase):
         self.assertEqual(self.done(events)["downloads"][0]["id"], download["id"])
         fetched = await self.client.get(f"/v1/downloads/{download['id']}", headers=AUTH)
         self.assertEqual(await fetched.read(), PDF)
+        # Queda guardada fuera de la carpeta del navegador, con una ficha de dónde salió.
+        saved = self.done(events)["downloads"][0]["saved_as"]
+        self.assertTrue(saved.endswith("_factura-marzo.pdf"))
+        guardadas = Path(self._tmp.name) / "guardadas"
+        self.assertEqual((guardadas / saved).read_bytes(), PDF)
+        self.assertFalse((Path(self._tmp.name) / "descargas" / "factura-marzo.pdf").exists())
+        listed = self.executor.saved_downloads()
+        self.assertEqual([(d["file"], d["name"], d["bytes"]) for d in listed], [(saved, "factura-marzo.pdf", len(PDF))])
+        self.assertIn("/facturas", listed[0]["from"])
         self.assertEqual((await self.client.get("/v1/downloads/d_nada", headers=AUTH)).status, 404)
 
 

@@ -93,6 +93,8 @@ def main() -> None:
         usage=transport.usage,
         library=Library(paths.get("library") or Path(paths["journal"]).with_name("biblioteca.sqlite")),
         certificates=certificates,
+        # Fuera de la carpeta del contenedor del navegador: aquí no llega ninguna web.
+        saved_downloads_dir=Path(paths.get("saved_downloads") or Path(paths["journal"]).with_name("descargas")),
     )
     host, _, port = cfg.get("listen", "127.0.0.1:8787").partition(":")
     if "mcp" not in cfg:

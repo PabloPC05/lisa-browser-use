@@ -48,6 +48,8 @@ journal = "/var/lib/lisa-browser/registro.sqlite"
 # library = "/var/lib/lisa-browser/biblioteca.sqlite"
 downloads = "/var/lib/lisa-navegador/descargas"
 uploads = "/var/lib/lisa-navegador/subidas"
+# Descargas guardadas, fuera del alcance del navegador. Si no se indica, `descargas` junto al registro.
+# saved_downloads = "/var/lib/lisa-browser/descargas"
 # Cómo ve Chromium esas mismas carpetas dentro del contenedor.
 downloads_in_browser = "/descargas"
 uploads_in_browser = "/subidas"

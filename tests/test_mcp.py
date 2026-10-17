@@ -42,6 +42,9 @@ class FakeExecutor:
     def download_path(self, download_id: str) -> Path | None:
         return self.downloads.get(download_id)
 
+    def saved_downloads(self, limit: int = 30) -> list[dict]:
+        return [{"file": "2026-10-17_120000_factura.pdf", "name": "factura.pdf", "bytes": 3, "from": "https://ejemplo.es/"}][:limit]
+
 
 def ask_approval(category: str) -> Callable[[Operation], dict[str, Any]]:
     def script(operation: Operation) -> dict[str, Any]:
@@ -249,7 +252,12 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         names = {t.name for t in await browser.mcp.list_tools()}
         self.assertEqual(names, {
             "open", "follow", "task", "read", "login", "save_password", "card", "attach", "screenshot", "sessions",
-            "logout", "log", "routine", "library", "boe_search", "official_site", "user_step"})
+            "logout", "log", "routine", "library", "downloads", "boe_search", "official_site", "user_step"})
+
+    async def test_saved_downloads_are_listed(self) -> None:
+        _, browser = self.make(lambda op: {})
+        listed = self.data(await self.call(browser, "downloads", {}))
+        self.assertEqual(listed["downloads"][0]["name"], "factura.pdf")
 
 
 class FakeContext:

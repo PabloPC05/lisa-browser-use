@@ -13,11 +13,13 @@ import hmac
 import json
 import logging
 import queue
+import shutil
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -143,6 +145,7 @@ class Executor:
         usage: Usage | None = None,
         library: Library | None = None,
         certificates: Certificates | None = None,
+        saved_downloads_dir: Path | None = None,
     ) -> None:
         self.settings = settings
         self._connect = connect
@@ -159,6 +162,8 @@ class Executor:
         self._lock = threading.Lock()
         self._waiting = 0
         self._downloads: dict[str, dict] = {}
+        # Las descargas se guardan aquí, fuera de la carpeta que ve el navegador, hasta que Pablo diga qué hacer con ellas.
+        self.saved_downloads_dir = Path(saved_downloads_dir) if saved_downloads_dir else None
 
     # --- ciclo de una operación -----------------------------------------------------
 
@@ -203,7 +208,7 @@ class Executor:
                 sites = [registrable_domain(url)]
                 if self.library is not None and result.get("status") not in ("ERROR", "CANCELLED"):
                     self.library.visited(url)
-                result["downloads"] = self._collect(operation)
+                result["downloads"] = self._collect(operation, url)
             except Exception:
                 log.debug("no se pudo cerrar la operación con la página", exc_info=True)
         self._journal.finish(
@@ -418,7 +423,7 @@ class Executor:
         except Exception:
             return True
 
-    def _collect(self, operation: Operation) -> list[dict]:
+    def _collect(self, operation: Operation, url: str = "") -> list[dict]:
         assert self._files is not None
         found = []
         # Un PDF que se quedó abierto en el visor se baja aquí, para que llegue como cualquier descarga.
@@ -429,10 +434,40 @@ class Executor:
             # escribirlo y lo guarda como «download». Se entrega con el nombre que sale de su dirección.
             if pdf_name and "." not in item["name"]:
                 item = {**item, "name": pdf_name}
+            item = self._archive(item, url)
             download_id = "d_" + uuid.uuid4().hex[:12]
             self._downloads[download_id] = item
             operation.emit("download", id=download_id, name=item["name"], bytes=item["bytes"])
-            found.append({"id": download_id, "name": item["name"], "bytes": item["bytes"]})
+            found.append({"id": download_id, "name": item["name"], "bytes": item["bytes"],
+                          **({"saved_as": item["saved_as"]} if "saved_as" in item else {})})
+        return found
+
+    def _archive(self, item: dict, url: str) -> dict:
+        """Lleva la descarga a la carpeta de descargas guardadas, con una ficha de dónde salió."""
+        if self.saved_downloads_dir is None:
+            return item
+        self.saved_downloads_dir.mkdir(parents=True, exist_ok=True)
+        stem = time.strftime("%Y-%m-%d_%H%M%S") + "_" + Path(item["name"]).name
+        target, n = self.saved_downloads_dir / stem, 1
+        while target.exists():
+            n += 1
+            target = self.saved_downloads_dir / f"{n}-{stem}"
+        shutil.move(item["path"], target)
+        card = {"name": item["name"], "bytes": item["bytes"], "from": url,
+                "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        target.with_name(target.name + ".json").write_text(json.dumps(card, ensure_ascii=False))
+        return {**item, "path": str(target), "saved_as": target.name}
+
+    def saved_downloads(self, limit: int = 30) -> list[dict]:
+        """Las descargas guardadas, de la más reciente a la más antigua."""
+        if self.saved_downloads_dir is None or not self.saved_downloads_dir.is_dir():
+            return []
+        found = []
+        for card in sorted(self.saved_downloads_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]:
+            try:
+                found.append({"file": card.name[:-len(".json")], **json.loads(card.read_text())})
+            except ValueError:
+                continue
         return found
 
     def download_path(self, download_id: str) -> Path | None:
