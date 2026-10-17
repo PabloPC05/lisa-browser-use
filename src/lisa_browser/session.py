@@ -12,14 +12,133 @@ import base64
 import json
 import logging
 import re
+import threading
+import time
 import unicodedata
-from typing import Any
+from typing import Any, Callable
 
 import httpx
-from arc_cua.backends.cdp import CDPConnection, browser_ws_url
+from arc_cua.backends.cdp import CDPConnection, CDPError, ChromeProcess, browser_ws_url
 from arc_cua.backends.chrome import ChromeBackend
+from websockets.exceptions import ConnectionClosed
+from websockets.protocol import State
+from websockets.sync.client import connect as ws_connect
 
 log = logging.getLogger(__name__)
+
+# Errores de una orden que solo lee y que se arreglan repitiéndola: la página cambió mientras
+# se evaluaba algo en ella.
+_NAVIGATED = (
+    "Execution context was destroyed",
+    "Inspected target navigated or closed",
+    "Cannot find default execution context",
+    "Cannot find context with specified id",
+)
+
+
+class Connection(CDPConnection):
+    """La conexión de arc-cua con Chromium, que no se cae por no leerla y se rehace si se cae.
+
+    websockets deja de leer del socket cuando tiene más de 16 mensajes sin recoger, y entonces
+    tampoco lee la respuesta a su ping: a los 20-40 s cierra la conexión con «1011 keepalive
+    ping timeout». Una página con actividad (Instagram) manda eventos sin parar mientras el
+    ejecutor espera un código o no hace nada; por eso un hilo los recoge cuando nadie usa la
+    conexión. Ni una navegación a otro origen ni el cambio de proceso de la pestaña la rompen.
+
+    Si aun así se cae, la orden siguiente abre otra conexión al mismo Chromium, repite la
+    configuración del navegador (`_REPLAY`), vuelve a la pestaña con `on_reopen` y se envía
+    por la nueva. Como la orden no llegó a salir, sea cual sea no se hace dos veces.
+    """
+
+    ping_interval = 20.0
+    ping_timeout = 20.0
+    #: Cada cuánto se recogen los eventos, y cuánto tiene que llevar la conexión sin usarse.
+    drain_every_s = 1.0
+    # Órdenes del navegador (sin pestaña) que configuran la conexión y se pierden con ella.
+    _REPLAY = ("Target.setDiscoverTargets", "Browser.setDownloadBehavior")
+
+    def __init__(self, ws_url: str, *, timeout_s: float = 15, on_event: Callable | None = None) -> None:
+        self.ws_url = ws_url
+        self.timeout_s = timeout_s
+        self.on_event = on_event
+        #: Vuelve a la pestaña tras rehacer la conexión; devuelve la sesión nueva.
+        self.on_reopen: Callable[[], str | None] | None = None
+        self._next_id = 0
+        self._lock = threading.RLock()
+        self._setup: dict[str, dict[str, Any]] = {}
+        self._used = time.monotonic()
+        self._closed = False
+        self._open()
+        threading.Thread(target=self._keep_reading, name="cdp-drain", daemon=True).start()
+
+    def _open(self) -> None:
+        self._connection = ws_connect(
+            self.ws_url, max_size=None, compression=None, proxy=None, open_timeout=self.timeout_s,
+            ping_interval=self.ping_interval, ping_timeout=self.ping_timeout,
+        )
+        self._ws = self._connection.__enter__()
+
+    def is_open(self) -> bool:
+        return self._ws.protocol.state is State.OPEN
+
+    def call(
+        self, method: str, params: dict[str, Any] | None = None, *, session_id: str | None = None, **kwargs: Any,
+    ) -> dict[str, Any]:
+        with self._lock:
+            try:
+                if not self._closed and not self.is_open():
+                    session_id = self._reopen(session_id)
+                if session_id is None and method in self._REPLAY:
+                    self._setup[method] = dict(params or {})
+                return super().call(method, params, session_id=session_id, **kwargs)
+            finally:
+                self._used = time.monotonic()
+
+    def drain(self) -> None:
+        with self._lock:
+            try:
+                if not self._closed and not self.is_open():
+                    self._reopen(None)
+                super().drain()
+            finally:
+                self._used = time.monotonic()
+
+    def close(self) -> None:
+        # Cerrada a propósito no se rehace.
+        self._closed = True
+        with self._lock:
+            super().close()
+
+    def _reopen(self, session_id: str | None) -> str | None:
+        log.info("conexión con Chromium caída; se abre otra y se vuelve a la pestaña")
+        try:
+            self._connection.__exit__(None, None, None)
+        except Exception:
+            pass
+        self._open()
+        for method, params in self._setup.items():
+            super().call(method, params)
+        session = self.on_reopen() if self.on_reopen is not None else None
+        # La sesión de la pestaña era de la conexión vieja: la orden va por la nueva.
+        return session if session_id is not None else None
+
+    def _keep_reading(self) -> None:
+        """Recoge los eventos pendientes cuando la conexión lleva un rato sin usarse.
+
+        Solo entonces: los eventos cambian el estado del backend de arc-cua (diálogo abierto,
+        peticiones en curso), y mientras trabaja ese estado solo debe cambiar en su hilo.
+        """
+        while not self._closed:
+            time.sleep(self.drain_every_s)
+            if time.monotonic() - self._used < self.drain_every_s or not self._lock.acquire(blocking=False):
+                continue
+            try:
+                if not self._closed and self.is_open():
+                    CDPConnection.drain(self)
+            except Exception:
+                log.debug("no se pudieron recoger los eventos de Chromium", exc_info=True)
+            finally:
+                self._lock.release()
 
 _READ_JS = "document.body ? document.body.innerText : ''"
 # Enlaces que se ven, con su texto en una línea. Solo los que llevan a una dirección web.
@@ -60,6 +179,7 @@ _HIDE_SECRETS_CSS = "\n".join(
 )
 _HIDE_SECRETS_JS = """
 (() => {
+  if (window.__lisaHide) return true;  // ya ocultos: se puede repetir sin dejar una hoja de más
   const sheet = new CSSStyleSheet();
   sheet.replaceSync(%s);
   window.__lisaHide = sheet;
@@ -136,17 +256,33 @@ class Browser:
         self.backend = backend
         #: Dirección WebSocket del navegador, para abrirle otra conexión (navegador en vivo).
         self.ws_url = ws_url
+        if isinstance(backend._conn, Connection):
+            # Si la conexión se rehace, este mismo backend vuelve a la pestaña: quien lo tenga
+            # en la mano (gate.py, el planificador) sigue usándolo sin enterarse.
+            backend._conn.on_reopen = self._reattach
 
     @classmethod
     def launch(
         cls, *, executable: str | None = None, headless: bool = True, extra_args: tuple[str, ...] = (),
         user_data_dir: str | None = None,
     ) -> Browser:
-        """Arranca un Chromium propio. Para pruebas; en producción se usa `connect`."""
-        backend = ChromeBackend.launch(
-            headless=headless, executable=executable, extra_args=extra_args, user_data_dir=user_data_dir,
+        """Arranca un Chromium propio. Para pruebas; en producción se usa `connect`.
+
+        Es `ChromeBackend.launch` con la conexión de aquí (`Connection`).
+        """
+        process = ChromeProcess(
+            executable=executable, headless=headless, user_data_dir=user_data_dir, extra_args=extra_args,
         )
-        return cls(backend, backend._process.ws_url if backend._process is not None else None)
+        try:
+            connection = Connection(process.ws_url)
+            pages = [t for t in connection.call("Target.getTargets")["targetInfos"] if t["type"] == "page"]
+            target_id = pages[0]["targetId"] if pages else connection.call(
+                "Target.createTarget", {"url": "about:blank"},
+            )["targetId"]
+            return cls(ChromeBackend(connection, target_id, process=process), process.ws_url)
+        except BaseException:
+            process.close()
+            raise
 
     @classmethod
     def connect(cls, endpoint: str, *, locale: str = "", timezone: str = "") -> Browser:
@@ -159,7 +295,7 @@ class Browser:
         # Chromium lista las pestañas de la más reciente a la más antigua.
         pages = [t for t in httpx.get(base + "/json/list", timeout=5).json() if t.get("type") == "page"]
         ws_url = browser_ws_url(base)
-        connection = CDPConnection(ws_url)
+        connection = Connection(ws_url)
         if pages:
             target_id = pages[0]["id"]
             for stale in pages[1:]:
@@ -306,15 +442,45 @@ class Browser:
         """PNG de lo que se ve, con los campos de contraseña y de código en blanco. Es para Pablo, no para los modelos."""
         self._eval(_HIDE_SECRETS_JS)
         try:
-            return base64.b64decode(self._call("Page.captureScreenshot", {"format": "png"})["data"])
+            return base64.b64decode(self._call("Page.captureScreenshot", {"format": "png"}, retry=True)["data"])
         finally:
             self._eval(_SHOW_SECRETS_JS)
 
-    def _call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _reattach(self) -> str | None:
+        """Tras rehacer la conexión, vuelve a la misma pestaña; si ya no existe, a la que haya."""
+        backend = self.backend
+        pages = [t["targetId"] for t in backend._conn.call("Target.getTargets")["targetInfos"] if t["type"] == "page"]
+        if backend.target_id in pages:
+            target_id = backend.target_id
+        elif pages:
+            target_id = pages[0]
+        else:
+            target_id = backend._conn.call("Target.createTarget", {"url": "about:blank"})["targetId"]
+        # Con `present_as_desktop`, esto también vuelve a presentar la pestaña como de escritorio.
+        backend._attach(target_id)
+        return backend.session_id
+
+    def _call(self, method: str, params: dict[str, Any] | None = None, *, retry: bool = False) -> dict[str, Any]:
+        """Una orden de DevTools a la pestaña.
+
+        Una orden que no llegó a salir porque la conexión estaba caída se envía por una nueva
+        (`Connection`). Con `retry`, que es solo para órdenes que se pueden repetir sin efecto
+        (leer, capturar), también se repite una vez si la conexión cae esperando la respuesta
+        o si la página cambió mientras tanto; antes se espera a que termine de cargar.
+        """
+        try:
+            return self.backend._call(method, params)
+        except (ConnectionClosed, CDPError) as exc:
+            if not retry or not (isinstance(exc, ConnectionClosed) or any(m in str(exc) for m in _NAVIGATED)):
+                raise
+            log.info("%s falló (%s); se repite", method, exc)
+        time.sleep(0.1)
+        self.backend._wait_loaded()
         return self.backend._call(method, params)
 
     def _eval(self, expression: str) -> Any:
+        """Evalúa `expression` en la página. Solo para leer o para lo que se puede repetir: puede ir dos veces."""
         result = self._call(
-            "Runtime.evaluate", {"expression": expression, "returnByValue": True, "awaitPromise": True}
+            "Runtime.evaluate", {"expression": expression, "returnByValue": True, "awaitPromise": True}, retry=True,
         )
         return result.get("result", {}).get("value")
