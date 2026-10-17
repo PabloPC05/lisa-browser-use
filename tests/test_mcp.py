@@ -46,10 +46,13 @@ class FakeExecutor:
         return [{"file": "2026-10-17_120000_factura.pdf", "name": "factura.pdf", "bytes": 3, "from": "https://ejemplo.es/"}][:limit]
 
 
+PNG = base64.b64encode(b"PNG-captura-de-prueba").decode()
+
+
 def ask_approval(category: str) -> Callable[[Operation], dict[str, Any]]:
     def script(operation: Operation) -> dict[str, Any]:
         answer = operation.ask("approval", 20, category=category, domain="ejemplo.es", action="CLICK Enviar",
-                               fields=[["Nombre", "Ana"]], png="")
+                               fields=[["Nombre", "Ana"]], png=PNG)
         return {"status": "SUBTASK_COMPLETE" if answer == "once" else "DENIED", "answer": answer}
     return script
 
@@ -117,10 +120,49 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
                                  self.answering({"permitir": False}))
         self.assertEqual(self.data(result)["status"], "DENIED")
 
-    async def test_client_without_forms_never_approves(self) -> None:
-        _, browser = self.make(ask_approval("enviar"))
-        result = await self.call(browser, "task", {"goal": "Enviar", "verification": ["Enviado"]})
+    async def test_without_forms_a_payment_is_never_asked_by_chat(self) -> None:
+        _, browser = self.make(ask_approval("dinero"))
+        result = await self.call(browser, "task", {"goal": "Pagar", "verification": ["Pagado"]})
         self.assertEqual(self.data(result)["status"], "DENIED")
+
+    async def test_without_forms_sending_is_asked_by_chat(self) -> None:
+        # Como claude.ai: sin formularios, la operación se para y el agente pregunta a Pablo en el chat.
+        _, browser = self.make(ask_approval("enviar"))
+        parked = await self.call(browser, "task", {"goal": "Enviar", "verification": ["Enviado"]})
+        asked = self.data(parked)
+        self.assertEqual(asked["status"], "NEEDS_APPROVAL")
+        self.assertEqual((asked["domain"], asked["action"], asked["fields"]), ("ejemplo.es", "CLICK Enviar", ["Nombre: Ana"]))
+        self.assertEqual([c.data for c in parked.content if isinstance(c, types.ImageContent)], [PNG])
+        done = await self.call(browser, "answer", {"operation": asked["operation"], "permitir": True})
+        self.assertEqual(self.data(done)["status"], "SUBTASK_COMPLETE")
+        again = await self.call(browser, "answer", {"operation": asked["operation"], "permitir": True})
+        self.assertEqual(self.data(again)["status"], "no_pending")
+
+    async def test_a_no_by_chat_denies(self) -> None:
+        _, browser = self.make(ask_approval("borrar"))
+        asked = self.data(await self.call(browser, "task", {"goal": "Borrar", "verification": ["Borrado"]}))
+        missing = self.data(await self.call(browser, "answer", {"operation": asked["operation"]}))
+        self.assertEqual(missing["status"], "invalid")
+        done = await self.call(browser, "answer", {"operation": asked["operation"], "permitir": False})
+        self.assertEqual(self.data(done)["status"], "DENIED")
+
+    async def test_without_forms_a_code_is_asked_by_chat(self) -> None:
+        _, browser = self.make(ask_secret("code"))
+        asked = self.data(await self.call(browser, "login", {}))
+        self.assertEqual((asked["status"], asked["domain"]), ("NEEDS_CODE", "ejemplo.es"))
+        done = await self.call(browser, "answer", {"operation": asked["operation"], "codigo": " 654321 "})
+        self.assertEqual(self.data(done)["got"], "654321")
+
+    async def test_without_forms_a_card_is_never_asked_by_chat(self) -> None:
+        _, browser = self.make(ask_secret("card"))
+        result = self.data(await self.call(browser, "card", {}))
+        self.assertEqual(result["status"], "ok")
+        self.assertNotIn("got", result)
+
+    async def test_answer_to_nothing(self) -> None:
+        _, browser = self.make(lambda op: {})
+        result = self.data(await self.call(browser, "answer", {"operation": "op_nada", "permitir": True}))
+        self.assertEqual(result["status"], "no_pending")
 
     async def test_always_allow_send_on_domain(self) -> None:
         _, browser = self.make(ask_approval("enviar"))
@@ -252,7 +294,7 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         names = {t.name for t in await browser.mcp.list_tools()}
         self.assertEqual(names, {
             "open", "follow", "task", "read", "login", "save_password", "card", "attach", "screenshot", "sessions",
-            "logout", "log", "routine", "library", "downloads", "boe_search", "official_site", "user_step"})
+            "logout", "log", "routine", "library", "downloads", "answer", "boe_search", "official_site", "user_step"})
 
     async def test_saved_downloads_are_listed(self) -> None:
         _, browser = self.make(lambda op: {})
