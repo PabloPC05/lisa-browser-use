@@ -44,7 +44,7 @@ Los formularios caducan 15 s antes que el plazo del ejecutor (`approval_seconds`
 | `downloads` | Las descargas guardadas en el servidor, de la más reciente a la más antigua |
 | `answer` | La respuesta de Pablo, dada en el chat, a una operación parada con `NEEDS_APPROVAL` o `NEEDS_CODE` |
 | `library` | Sitios y rutinas guardados; `run` ejecuta una rutina |
-| `user_step` | Pedir a Pablo un paso a mano (Cl@ve, captcha) |
+| `user_step` | Pedir a Pablo un paso fuera del navegador que la web detecta sola (app Cl@ve, notificación en el móvil, enlace por correo). Pablo no ve ni toca el navegador: un captcha se resuelve con una captura y su respuesta en el chat, o lo hace él desde su navegador |
 
 `attach` solo descarga de direcciones https públicas (nada de la red de casa, Tailscale ni el propio servidor) y sin seguir redirecciones.
 
