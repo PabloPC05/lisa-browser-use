@@ -1,15 +1,14 @@
-"""API del ejecutor (PLAN §4.2): el puente pide operaciones y recibe sus eventos.
+"""El ejecutor: hace las operaciones del navegador que pide el MCP (mcp_server.py).
 
 Una operación a la vez. Cada operación corre en un hilo, porque arc-cua es
-síncrona, y publica eventos que la petición HTTP devuelve línea a línea. Los
-eventos `approval` y `secret` esperan una respuesta del puente.
+síncrona, y publica eventos que el MCP sigue. Los eventos `approval` y `secret`
+esperan una respuesta de Pablo.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import hmac
 import json
 import logging
 import queue
@@ -17,42 +16,28 @@ import shutil
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from aiohttp import web
-
-from .card import pay_with_card
-from .certificate import Certificates
 from .files import Files
 from .gate import ApprovalRequest, run_gated_subtask
 from .jev import Usage
 from .journal import Journal
-from .library import Library, LibraryError, MissingParams, substitute
+from .library import Library, MissingParams, substitute
 from .login import HAS_PASSWORD_JS, login, save_password
 from .runner import Limits
-from .screencast import Screencast
 from .session import Browser
 from .vault import Vault, registrable_domain
 
 log = logging.getLogger(__name__)
 
-OPS = (
-    "open", "follow", "task", "read", "login", "save_password", "attach", "screenshot", "sessions", "logout", "log",
-    "routine", "card",
-)
-#: La emisión del navegador en vivo de la aplicación, para quien la necesite fuera de su ruta.
-SCREENCAST = web.AppKey("screencast", Screencast)
-
-_COLLECT_AFTER = ("open", "follow", "task", "login", "save_password", "routine", "card")
+_COLLECT_AFTER = ("open", "follow", "task", "login", "save_password", "routine")
 
 
 @dataclass(frozen=True)
 class Settings:
-    token: str
     money_domains: tuple[str, ...] = ()
     limits: Limits = Limits()
     approval_seconds: float = 600.0
@@ -144,7 +129,6 @@ class Executor:
         vault: Vault | None = None,
         usage: Usage | None = None,
         library: Library | None = None,
-        certificates: Certificates | None = None,
         saved_downloads_dir: Path | None = None,
     ) -> None:
         self.settings = settings
@@ -156,7 +140,6 @@ class Executor:
         self._vault = vault
         self._usage = usage
         self.library = library
-        self.certificates = certificates
         self._browser: Browser | None = None
         self._files: Files | None = None
         self._lock = threading.Lock()
@@ -262,8 +245,6 @@ class Executor:
             return {"status": "ok", "sessions": [s for s in self._journal.sessions() if s["domain"] in with_cookies]}
         if op == "logout":
             domain = str(args.get("domain") or "all")
-            if domain == "all" and self.certificates is not None:
-                self.certificates.deactivate()
             closed = files.logout(domain)
             self._journal.session_closed(None if domain == "all" else registrable_domain(domain))
             return {"status": "ok", "closed": closed}
@@ -275,20 +256,6 @@ class Executor:
             )
             return answer if answer in ("once", "deny") else "expired"
 
-        if op == "card":
-            # La tarjeta la escribe Pablo en el chat: va del puente al ejecutor sin pasar por el agente.
-            result = pay_with_card(
-                browser, self._policy_for(operation), approve,
-                ask_card=lambda domain, timeout: operation.ask("secret", timeout, kind="card", domain=domain),
-                on_secret=lambda value: self._journal.add_secret(journal_id, value),
-                card_seconds=self.settings.code_seconds,
-                money_domains=self.settings.money_domains, domain_of=registrable_domain,
-                on_effect=lambda *effect: self._journal.effect(journal_id, *effect),
-                on_step=on_step, cancel=operation.cancel, usage=self._usage,
-                price_per_mtok=self.settings.price_per_mtok, limits=self.settings.limits,
-            )
-            result["page"] = _brief(result.get("page"))
-            return result
         if op == "task":
             payload = {k: args[k] for k in ("goal", "verification", "inputs", "constraints", "max_actions") if k in args}
             result = run_gated_subtask(
@@ -304,12 +271,6 @@ class Executor:
             if find:
                 result.update(_text_of(browser.read(int(args.get("read_chars", 1500)), find=find)))
             return result
-        if op == "login" and args.get("method") == "certificate":
-            if self._vault is None or self.certificates is None:
-                return {"status": "certificate_unavailable", "reason": "no hay baúl o proxy de certificados configurado"}
-            # El certificado se activa para los dominios oficiales; entrar en la sede lo hace el planificador
-            # eligiendo «certificado electrónico» en su página de acceso.
-            return self.certificates.login(self._vault, str(args.get("account") or ""))
         if op in ("login", "save_password"):
             if self._vault is None:
                 return {"status": "vault_unavailable", "reason": "no hay baúl configurado"}
@@ -360,7 +321,7 @@ class Executor:
             op = step["op"]
             label = str(step.get("goal") or step.get("url") or step.get("text") or step.get("find") or op)[:80]
             operation.emit("step", n=n, action=f"rutina {n}/{len(steps)}: {op}", target=label, ms=0)
-            if op == "login" and step.get("method") != "certificate" and not browser._eval(HAS_PASSWORD_JS):
+            if op == "login" and not browser._eval(HAS_PASSWORD_JS):
                 # La sesión del sitio se conserva entre tareas: si la página no pide contraseña, ya está dentro.
                 continue
             args = {k: v for k, v in step.items() if k != "op"}
@@ -407,13 +368,6 @@ class Executor:
             self._browser = self._connect()
             self._files = self._files_for(self._browser)
         return self._browser
-
-    def live_source(self) -> tuple[str, str] | None:
-        """La pestaña en la que trabaja el ejecutor, para el navegador en vivo; None si aún no hay navegador."""
-        browser = self._browser
-        if browser is None or browser.ws_url is None:
-            return None
-        return browser.ws_url, browser.backend.target_id
 
     def _browser_is_dead(self) -> bool:
         if self._browser is None:
@@ -473,166 +427,3 @@ class Executor:
     def download_path(self, download_id: str) -> Path | None:
         item = self._downloads.get(download_id)
         return Path(item["path"]) if item else None
-
-    def journal_summary(self, since: str | None) -> list[dict]:
-        return self._journal.summary(since)
-
-
-def make_app(executor: Executor) -> web.Application:
-    pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="operacion")
-    operations: dict[str, Operation] = {}
-    expected = f"Bearer {executor.settings.token}"
-
-    @web.middleware
-    async def auth(request: web.Request, handler: Any) -> web.StreamResponse:
-        if not hmac.compare_digest(request.headers.get("Authorization", "").encode(), expected.encode()):
-            return web.json_response({"error": "unauthorized"}, status=401)
-        return await handler(request)
-
-    async def start(request: web.Request) -> web.StreamResponse:
-        try:
-            body = await request.json()
-            op, args = body["op"], body.get("args") or {}
-            if op not in OPS or not isinstance(args, dict):
-                raise ValueError
-        except (ValueError, KeyError, TypeError):
-            return web.json_response({"error": "invalid_request", "ops": list(OPS)}, status=400)
-        operation = Operation(body.get("conversation"), op, args, asyncio.get_running_loop())
-        operations[operation.id] = operation
-        response = web.StreamResponse(headers={"Content-Type": "application/x-ndjson"})
-        await response.prepare(request)
-        await response.write(json.dumps({"type": "started", "operation": operation.id}).encode() + b"\n")
-        work = asyncio.get_running_loop().run_in_executor(pool, executor.run, operation)
-        try:
-            while True:
-                event = await operation.events.get()
-                await response.write(json.dumps(event, ensure_ascii=False).encode() + b"\n")
-                if event["type"] == "done":
-                    break
-        except (ConnectionResetError, asyncio.CancelledError):
-            operation.cancel.set()  # el puente se fue: no se sigue actuando a ciegas
-            raise
-        finally:
-            operations.pop(operation.id, None)
-            await asyncio.shield(work)
-        await response.write_eof()
-        return response
-
-    async def answer(request: web.Request) -> web.Response:
-        operation = operations.get(request.match_info["id"])
-        body = await request.json()
-        if operation is None or not operation.answer(str(body.get("event")), body.get("value")):
-            return web.json_response({"error": "not_waiting"}, status=404)
-        return web.json_response({"ok": True})
-
-    async def cancel(request: web.Request) -> web.Response:
-        operation = operations.get(request.match_info["id"])
-        if operation is None:
-            return web.json_response({"error": "not_found"}, status=404)
-        operation.cancel.set()
-        return web.json_response({"ok": True})
-
-    async def upload(request: web.Request) -> web.Response:
-        name = request.match_info["name"]
-        if Path(name).name != name or name.startswith("."):
-            return web.json_response({"error": "invalid_name"}, status=400)
-        target = executor.uploads_dir / name
-        with open(target, "wb") as out:
-            async for chunk in request.content.iter_chunked(1 << 20):
-                out.write(chunk)
-        return web.json_response({"ok": True, "name": name, "bytes": target.stat().st_size})
-
-    async def download(request: web.Request) -> web.StreamResponse:
-        path = executor.download_path(request.match_info["id"])
-        if path is None or not path.is_file():
-            return web.json_response({"error": "not_found"}, status=404)
-        return web.FileResponse(path)
-
-    # --- biblioteca: sitios habituales y rutinas -------------------------------------
-    # No pasan por la cola de operaciones: no tocan el navegador y deben responder
-    # aunque haya una tarea en curso.
-
-    def with_library(handler: Callable[[web.Request, Library], Any]) -> Any:
-        async def wrapped(request: web.Request) -> web.Response:
-            if executor.library is None:
-                return web.json_response({"error": "library_unavailable"}, status=404)
-            try:
-                return web.json_response(await handler(request, executor.library))
-            except LibraryError as exc:
-                return web.json_response({"error": "invalid", "reason": str(exc)}, status=400)
-            except (ValueError, TypeError, AttributeError):
-                return web.json_response({"error": "invalid_request"}, status=400)
-        return wrapped
-
-    async def library_list(request: web.Request, library: Library) -> dict:
-        limit = request.query.get("limit")
-        return library.listing(request.query.get("q", ""), int(limit) if limit else None)
-
-    async def site_put(request: web.Request, library: Library) -> dict:
-        body = await request.json()
-        return library.save_site(request.match_info["name"], body.get("url"), body.get("notes"), body.get("aliases"))
-
-    async def site_delete(request: web.Request, library: Library) -> dict:
-        return {"deleted": library.delete_site(request.match_info["name"])}
-
-    async def routine_get(request: web.Request, library: Library) -> dict:
-        found = library.routine(request.match_info["name"])
-        if found is None:
-            raise LibraryError("no hay ninguna rutina con ese nombre")
-        return found
-
-    async def routine_put(request: web.Request, library: Library) -> dict:
-        body = await request.json()
-        return library.save_routine(request.match_info["name"], body.get("description"), body.get("steps"))
-
-    async def routine_delete(request: web.Request, library: Library) -> dict:
-        return {"deleted": library.delete_routine(request.match_info["name"])}
-
-    # --- navegador en vivo (lisa-assistant D86) ------------------------------------
-    # Solo para mirar. Una línea por evento: `frame` (JPEG en base64), `idle` y `ping`.
-
-    screencast = Screencast(executor.live_source)
-
-    async def live(request: web.Request) -> web.StreamResponse:
-        response = web.StreamResponse(headers={"Content-Type": "application/x-ndjson", "Cache-Control": "no-store"})
-        await response.prepare(request)
-        try:
-            async with screencast.watch() as events:
-                while True:
-                    try:
-                        event = await asyncio.wait_for(events.get(), timeout=15)
-                    except asyncio.TimeoutError:
-                        event = {"type": "ping"}
-                    await response.write(json.dumps(event).encode() + b"\n")
-        except (ConnectionResetError, asyncio.CancelledError):
-            pass
-        return response
-
-    async def journal(request: web.Request) -> web.Response:
-        return web.json_response({"operations": executor.journal_summary(request.query.get("since"))})
-
-    app = web.Application(middlewares=[auth], client_max_size=4 * 1024**3)
-    app[SCREENCAST] = screencast
-    app.add_routes([
-        web.post("/v1/operations", start),
-        web.post("/v1/operations/{id}/answers", answer),
-        web.post("/v1/operations/{id}/cancel", cancel),
-        web.put("/v1/uploads/{name}", upload),
-        web.get("/v1/downloads/{id}", download),
-        web.get("/v1/journal", journal),
-        web.get("/v1/screencast", live),
-        web.get("/v1/library", with_library(library_list)),
-        web.put("/v1/library/sites/{name}", with_library(site_put)),
-        web.delete("/v1/library/sites/{name}", with_library(site_delete)),
-        web.get("/v1/library/routines/{name}", with_library(routine_get)),
-        web.put("/v1/library/routines/{name}", with_library(routine_put)),
-        web.delete("/v1/library/routines/{name}", with_library(routine_delete)),
-    ])
-
-    async def close(_: web.Application) -> None:
-        for operation in list(operations.values()):
-            operation.cancel.set()
-        pool.shutdown(wait=False, cancel_futures=True)
-
-    app.on_cleanup.append(close)
-    return app

@@ -1,4 +1,4 @@
-"""API del ejecutor de punta a punta: HTTP real, Chromium real, política fijada y baúl ficticio."""
+"""El ejecutor de punta a punta: Chromium real, política fijada y baúl ficticio."""
 
 from __future__ import annotations
 
@@ -10,12 +10,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from aiohttp.test_utils import TestClient, TestServer
-
 from lisa_browser.files import Files
 from lisa_browser.journal import Journal
 from lisa_browser.runner import Limits
-from lisa_browser.server import Executor, Settings, make_app
+from lisa_browser.executor import Executor, Operation, Settings
 from lisa_browser.session import Browser
 from lisa_browser.vault import Entry, FakeVault
 from tests.site import Site, page
@@ -26,12 +24,9 @@ from tests.test_login import (
     CODE, LOGIN_PAGES, PASSWORD, TYPE_AND_ENTER, TYPE_CODE, TYPE_CODE_ELSEWHERE, USER, cut_after,
 )
 from tests.test_tasks import TASK_PAGES
-from tests.test_card import CARD_PAGES, CVV, NUMBER
 
-TOKEN = "token-de-prueba-abcdef"
-AUTH = {"Authorization": f"Bearer {TOKEN}"}
 PAGES = {
-    **TASK_PAGES, **GATE_PAGES, **FILE_PAGES, **LOGIN_PAGES, **CARD_PAGES,
+    **TASK_PAGES, **GATE_PAGES, **FILE_PAGES, **LOGIN_PAGES,
     "/dentro": page("Tu carné", "<h1>Hola, Pablo</h1><script>document.cookie = 'sesion=1; path=/; max-age=3600'</script>"),
 }
 ENTRY = Entry("e1", "Biblioteca Socios", USER, PASSWORD, ("http://socios.test/login",))
@@ -59,7 +54,7 @@ class ServerCase(unittest.IsolatedAsyncioTestCase):
         self.script: dict[str, tuple[list, bool]] = {}  # conversación -> (pasos, repetir)
         self.site.requests.clear()
         self.executor = Executor(
-            settings=Settings(token=TOKEN, **self.settings),
+            settings=Settings(**self.settings),
             connect=self.connect,
             policy_for=self.policy_for,
             journal=Journal(self.journal_path),
@@ -68,11 +63,8 @@ class ServerCase(unittest.IsolatedAsyncioTestCase):
             vault=FakeVault([ENTRY]),
             saved_downloads_dir=tmp / "guardadas",
         )
-        self.client = TestClient(TestServer(make_app(self.executor)))
-        await self.client.start_server()
 
     async def asyncTearDown(self) -> None:
-        await self.client.close()
         self._tmp.cleanup()
 
     def connect(self):
@@ -88,27 +80,26 @@ class ServerCase(unittest.IsolatedAsyncioTestCase):
     async def op(self, op: str, args: dict | None = None, *, conversation: str = "c1", answers: list | None = None,
                  on_event=None) -> list[dict]:
         """Lanza una operación, contesta a lo que pregunte con `answers` y devuelve todos sus eventos."""
+        loop = asyncio.get_running_loop()
+        operation = Operation(conversation, op, args or {}, loop)
+        work = loop.run_in_executor(None, self.executor.run, operation)
         events: list[dict] = []
-        body = {"conversation": conversation, "op": op, "args": args or {}}
-        async with self.client.post("/v1/operations", json=body, headers=AUTH) as response:
-            self.assertEqual(response.status, 200)
-            operation = None
-            async for raw in response.content:
-                event = json.loads(raw)
-                events.append(event)
-                if event["type"] == "started":
-                    operation = event["operation"]
-                if on_event is not None:
-                    await on_event(operation, event)
-                if event["type"] in ("approval", "secret") and answers:
+        while not events or events[-1]["type"] != "done":
+            event = await operation.events.get()
+            events.append(event)
+            if on_event is not None:
+                await on_event(operation, event)
+            if event["type"] in ("approval", "secret") and answers:
+                value = answers.pop(0)
+                if isinstance(value, float):  # espera antes de contestar
+                    await asyncio.sleep(value)
                     value = answers.pop(0)
-                    if isinstance(value, float):  # espera antes de contestar
-                        await asyncio.sleep(value)
-                        value = answers.pop(0)
-                    await self.client.post(
-                        f"/v1/operations/{operation}/answers", json={"event": event["event"], "value": value}, headers=AUTH,
-                    )
+                operation.answer(event["event"], value)
+        await work
         return events
+
+    def journal(self) -> list[dict]:
+        return self.executor._journal.summary(None)
 
     @staticmethod
     def done(events: list[dict]) -> dict:
@@ -124,25 +115,13 @@ class ServerCase(unittest.IsolatedAsyncioTestCase):
         return text
 
 
-class Access(ServerCase):
-    async def test_requests_without_the_token_are_refused(self) -> None:
-        for headers in ({}, {"Authorization": "Bearer otro"}, {"Authorization": TOKEN}):
-            response = await self.client.post("/v1/operations", json={"op": "read"}, headers=headers)
-            self.assertEqual(response.status, 401)
-        self.assertEqual((await self.client.get("/v1/journal")).status, 401)
-
-    async def test_unknown_operation_is_rejected(self) -> None:
-        response = await self.client.post("/v1/operations", json={"op": "formatear"}, headers=AUTH)
-        self.assertEqual(response.status, 400)
-
-
 class Tasks(ServerCase):
     async def test_open_task_and_read(self) -> None:
         await self.open("/")
         self.steps("c1", ("CLICK", "Horarios"), ("SUBTASK_COMPLETE",))
         events = await self.op("task", {"goal": "Ver horarios", "verification": ["Se ve el horario"]})
-        self.assertEqual([e["type"] for e in events], ["started", "step", "done"])
-        self.assertEqual((events[1]["action"], events[1]["target"]), ("CLICK", "Horarios"))
+        self.assertEqual([e["type"] for e in events], ["step", "done"])
+        self.assertEqual((events[0]["action"], events[0]["target"]), ("CLICK", "Horarios"))
         self.assertEqual(self.done(events)["status"], "SUBTASK_COMPLETE")
         self.assertIn("9:00 a 21:00", self.done(await self.op("read"))["text"])
 
@@ -179,7 +158,7 @@ class Tasks(ServerCase):
         await self.open("/")
         self.steps("c1", ("CLICK", "Horarios"), ("SUBTASK_COMPLETE",))
         await self.op("task", {"goal": "Ver horarios", "verification": ["x"]})
-        listed = (await (await self.client.get("/v1/journal", headers=AUTH)).json())["operations"]
+        listed = self.journal()
         self.assertEqual([(o["op"], o["status"], o["steps"]) for o in listed], [("open", "200", 0), ("task", "SUBTASK_COMPLETE", 1)])
         self.assertEqual(listed[1]["sites"], ["127.0.0.1"])
         self.assertEqual(self.done(await self.op("log"))["operations"][1]["goal"], "Ver horarios")
@@ -190,7 +169,7 @@ class Tasks(ServerCase):
 
         async def cancel_on_first_step(operation, event):
             if event["type"] == "step" and event["n"] == 1:
-                await self.client.post(f"/v1/operations/{operation}/cancel", headers=AUTH)
+                operation.cancel.set()
 
         events = await self.op("task", {"goal": "No acabar", "verification": ["x"], "max_actions": 40}, on_event=cancel_on_first_step)
         self.assertEqual(self.done(events)["status"], "CANCELLED")
@@ -199,7 +178,7 @@ class Tasks(ServerCase):
     async def test_screenshot_is_an_event_not_part_of_the_result(self) -> None:
         await self.open("/")
         events = await self.op("screenshot")
-        self.assertTrue(base64.b64decode(events[1]["png"]).startswith(b"\x89PNG"))
+        self.assertTrue(base64.b64decode(events[0]["png"]).startswith(b"\x89PNG"))
         self.assertEqual(self.done(events), {"status": "ok", "sent": True})
 
 
@@ -216,7 +195,7 @@ class Approvals(ServerCase):
         self.assertTrue(base64.b64decode(approval["png"]).startswith(b"\x89PNG"))
         self.assertEqual(self.done(events)["status"], "SUBTASK_COMPLETE")
         self.assertEqual(len(self.site.posts("/enviado")), 1)
-        journal = (await (await self.client.get("/v1/journal", headers=AUTH)).json())["operations"]
+        journal = self.journal()
         self.assertEqual([(e["category"], e["decision"]) for e in journal[-1]["effects"]], [("enviar", "once")])
 
     async def test_deny(self) -> None:
@@ -236,7 +215,7 @@ class ApprovalTimes(ServerCase):
         events = await self.op("task", Approvals.SEND)
         self.assertEqual(self.done(events)["status"], "DENIED")
         self.assertEqual(self.site.posts(), [])
-        journal = (await (await self.client.get("/v1/journal", headers=AUTH)).json())["operations"]
+        journal = self.journal()
         self.assertEqual(journal[-1]["effects"][0]["decision"], "expired")
 
 
@@ -253,7 +232,7 @@ class WaitsAreNotCounted(ServerCase):
         self.assertGreater(self.done(events)["metrics"]["seconds"], 6)
 
     async def test_the_limit_still_applies_to_the_work_itself(self) -> None:
-        self.executor.settings = Settings(token=TOKEN, limits=Limits(operation_seconds=0.5))
+        self.executor.settings = Settings(limits=Limits(operation_seconds=0.5))
         await self.open("/contador")
         self.steps("c1", ("CLICK", "Otra vez"), repeat=True)
         events = await self.op("task", {"goal": "No acabar", "verification": ["x"], "max_actions": 40})
@@ -281,8 +260,8 @@ class Queue(ServerCase):
         release.set()
         self.assertEqual(self.done(await first)["status"], "SUBTASK_COMPLETE")
         events = await second
-        self.assertEqual([e["type"] for e in events], ["started", "queued", "done"])
-        self.assertEqual(events[1]["position"], 1)
+        self.assertEqual([e["type"] for e in events], ["queued", "done"])
+        self.assertEqual(events[0]["position"], 1)
 
 
 class Logins(ServerCase):
@@ -320,18 +299,16 @@ class Logins(ServerCase):
         await self.op("logout", {"domain": "socios.test"})
 
     async def test_unanswered_code_ends_the_login(self) -> None:
-        self.executor.settings = Settings(token=TOKEN, code_seconds=0.3)
+        self.executor.settings = Settings(code_seconds=0.3)
         await self.open("/login-codigo", "socios.test")
         self.steps("c1", *TYPE_AND_ENTER, ("NEEDS_INPUT", "Código de verificación"))
         events = await self.op("login")
         self.assertEqual((self.done(events)["status"], self.done(events)["reason"]), ("rejected", "code_timeout"))
 
 
-class FilesOverHttp(ServerCase):
-    async def test_upload_then_attach(self) -> None:
-        response = await self.client.put("/v1/uploads/bici.png", data=PHOTO, headers=AUTH)
-        self.assertEqual((await response.json())["bytes"], len(PHOTO))
-        self.assertEqual((await self.client.put("/v1/uploads/..%2Fx", data=b"x", headers=AUTH)).status, 400)
+class FilesAndDownloads(ServerCase):
+    async def test_uploaded_file_is_attached(self) -> None:
+        (self.executor.uploads_dir / "bici.png").write_bytes(PHOTO)
         await self.open("/anuncio")
         attached = self.done(await self.op("attach", {"file": "bici.png", "field": "foto"}))
         self.assertEqual(attached["status"], "ok")
@@ -343,8 +320,7 @@ class FilesOverHttp(ServerCase):
         download = next(e for e in events if e["type"] == "download")
         self.assertEqual((download["name"], download["bytes"]), ("factura-marzo.pdf", len(PDF)))
         self.assertEqual(self.done(events)["downloads"][0]["id"], download["id"])
-        fetched = await self.client.get(f"/v1/downloads/{download['id']}", headers=AUTH)
-        self.assertEqual(await fetched.read(), PDF)
+        self.assertEqual(self.executor.download_path(download["id"]).read_bytes(), PDF)
         # Queda guardada fuera de la carpeta del navegador, con una ficha de dónde salió.
         saved = self.done(events)["downloads"][0]["saved_as"]
         self.assertTrue(saved.endswith("_factura-marzo.pdf"))
@@ -354,7 +330,7 @@ class FilesOverHttp(ServerCase):
         listed = self.executor.saved_downloads()
         self.assertEqual([(d["file"], d["name"], d["bytes"]) for d in listed], [(saved, "factura-marzo.pdf", len(PDF))])
         self.assertIn("/facturas", listed[0]["from"])
-        self.assertEqual((await self.client.get("/v1/downloads/d_nada", headers=AUTH)).status, 404)
+        self.assertIsNone(self.executor.download_path("d_nada"))
 
 
 class LostConnection(ServerCase):
@@ -386,7 +362,7 @@ class LoginCut(ServerCase):
             {k: result[k] for k in ("status", "domain", "recovered")},
             {"status": "ok", "domain": "socios.test", "recovered": True},
         )
-        journal = (await (await self.client.get("/v1/journal", headers=AUTH)).json())["operations"]
+        journal = self.journal()
         self.assertEqual((journal[-1]["op"], journal[-1]["status"], journal[-1]["sites"]), ("login", "ok", ["socios.test"]))
         self.assertEqual([s["domain"] for s in self.done(await self.op("sessions"))["sessions"]], ["socios.test"])
         await self.op("logout", {"domain": "socios.test"})
@@ -397,7 +373,7 @@ class BrowserDown(ServerCase):
         raise OSError("sin contenedor")
 
     async def test_missing_browser_is_reported_and_nothing_else_is_tried(self) -> None:
-        with self.assertLogs("lisa_browser.server", "WARNING") as logged:
+        with self.assertLogs("lisa_browser.executor", "WARNING") as logged:
             events = await self.op("open", {"url": self.site.url("/")})
         self.assertEqual(self.done(events), {"status": "ERROR", "reason": "browser_unavailable"})
         # El motivo queda en el registro del servicio, para saber la próxima vez qué pasó.
@@ -406,31 +382,3 @@ class BrowserDown(ServerCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class Tramites(ServerCase):
-    """Lo que añaden los trámites: tarjeta dada en el momento y certificado digital."""
-
-    async def test_card_is_asked_as_a_secret_and_never_reaches_the_journal(self) -> None:
-        await self.open("/pasarela")
-        self.steps(
-            "c1", ("TYPE_TEXT", "Número de tarjeta", "numero_tarjeta"), ("TYPE_TEXT", "Caducidad", "caducidad_mm_aa"),
-            ("TYPE_TEXT", "CVV", "cvv"), ("CLICK", "Pagar"),
-        )
-        events = await self.op("card", answers=[f"{NUMBER} 12/27 {CVV}", "once"])
-        secret = next(e for e in events if e["type"] == "secret")
-        self.assertEqual((secret["kind"], secret["domain"]), ("card", "127.0.0.1"))
-        approval = next(e for e in events if e["type"] == "approval")
-        self.assertEqual(approval["category"], "dinero")
-        self.assertIn(["Número de tarjeta", "•••• 0004"], approval["fields"])
-        self.assertEqual(len(self.site.posts("/pagado")), 1)
-        self.assertEqual(self.done(events)["status"], "NEEDS_AGENT")
-        everything = json.dumps(events, ensure_ascii=False).replace(approval["png"], "")
-        self.assertNotIn(NUMBER, everything)
-        self.assertNotIn(NUMBER, self.dump())
-        self.assertNotIn(f"'{CVV}'", self.dump())
-
-    async def test_certificate_login_without_a_proxy_says_so(self) -> None:
-        await self.open("/")
-        result = self.done(await self.op("login", {"method": "certificate"}))
-        self.assertEqual(result["status"], "certificate_unavailable")

@@ -1,4 +1,7 @@
 ---
+
+> **18-10-2026:** se quitaron la API HTTP, el navegador en vivo, el certificado digital y el pago con tarjeta (ver «Lo que se quitó» en el README). Lo que este documento dice de ellos es histórico.
+
 issue: CU02 (con CU00, CU01, CU05 y CU06 de docs/07-backlog.md, solo en su parte de navegador)
 approved: true
 ---

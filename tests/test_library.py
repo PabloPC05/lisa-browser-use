@@ -10,7 +10,7 @@ from pathlib import Path
 from lisa_browser.library import Library, LibraryError, MissingParams, check_steps, key_of, params_of, substitute
 from tests.support import ByName
 from tests.test_login import PASSWORD, TYPE_AND_ENTER
-from tests.test_server import AUTH, ServerCase
+from tests.test_executor import ServerCase
 
 HORARIOS = [
     {"op": "open", "url": "http://127.0.0.1/"},
@@ -195,42 +195,6 @@ class LibraryCase(ServerCase):
         return [{**s, "url": self.site.url(s["url"], s.pop("host", "127.0.0.1"))} if "url" in s else s for s in map(dict, steps)]
 
 
-class LibraryOverHttp(LibraryCase):
-    async def test_needs_the_token(self) -> None:
-        self.assertEqual((await self.client.get("/v1/library")).status, 401)
-        self.assertEqual((await self.client.put("/v1/library/sites/x", json={"url": "https://a.test"})).status, 401)
-
-    async def test_sites_and_routines_round_trip(self) -> None:
-        put = await self.client.put(
-            "/v1/library/sites/Campus%20virtual", json={"url": "https://cv.usc.es/", "notes": "Mis cursos, arriba."}, headers=AUTH,
-        )
-        self.assertEqual((put.status, (await put.json())["name"]), (200, "Campus virtual"))
-        put = await self.client.put(
-            "/v1/library/routines/Horario", json={"description": "A qué hora abre.", "steps": HORARIOS}, headers=AUTH,
-        )
-        self.assertEqual(await put.json(), {"name": "Horario", "description": "A qué hora abre.", "params": [], "steps": 3})
-
-        listing = await (await self.client.get("/v1/library", headers=AUTH)).json()
-        self.assertEqual([(s["name"], s["url"], s["notes"]) for s in listing["sites"]], [("Campus virtual", "https://cv.usc.es/", "Mis cursos, arriba.")])
-        # El listado no trae los pasos: es lo que el planificador lleva en cada mensaje.
-        self.assertEqual(listing["routines"], [{"name": "Horario", "description": "A qué hora abre.", "params": [], "steps": 3, "runs": 0, "ok": 0, "last_status": None, "dormant": False}])
-        one = await (await self.client.get("/v1/library/routines/horario", headers=AUTH)).json()
-        self.assertEqual(one["steps"], HORARIOS)
-
-        self.assertEqual(await (await self.client.delete("/v1/library/routines/Horario", headers=AUTH)).json(), {"deleted": True})
-        self.assertEqual(await (await self.client.delete("/v1/library/sites/campus%20virtual", headers=AUTH)).json(), {"deleted": True})
-        self.assertEqual(await (await self.client.get("/v1/library", headers=AUTH)).json(), {"sites": [], "routines": []})
-
-    async def test_invalid_data_is_refused_with_the_reason(self) -> None:
-        bad_site = await self.client.put("/v1/library/sites/Campus", json={"url": "cv.usc.es"}, headers=AUTH)
-        self.assertEqual((bad_site.status, (await bad_site.json())["error"]), (400, "invalid"))
-        bad_routine = await self.client.put("/v1/library/routines/R", json={"description": "x", "steps": [{"op": "logout"}]}, headers=AUTH)
-        self.assertEqual(bad_routine.status, 400)
-        self.assertIn("paso 1", (await bad_routine.json())["reason"])
-        self.assertEqual((await self.client.put("/v1/library/routines/R", data=b"no es json", headers=AUTH)).status, 400)
-        self.assertEqual((await self.client.get("/v1/library/routines/no-existe", headers=AUTH)).status, 400)
-
-
 class Routines(LibraryCase):
     async def test_a_routine_does_all_its_steps_in_one_operation(self) -> None:
         self.library.save_routine("Horario", "A qué hora abre.", self.routine(
@@ -252,7 +216,7 @@ class Routines(LibraryCase):
         self.assertLess(len(json.dumps(result)), 900)
         self.assertEqual([(r["runs"], r["ok"], r["last_status"]) for r in self.library.routines()], [(1, 1, "ok")])
         # En el registro es una sola operación, con las acciones que decidió JEV.
-        journal = (await (await self.client.get("/v1/journal", headers=AUTH)).json())["operations"]
+        journal = self.journal()
         self.assertEqual([(o["op"], o["goal"], o["status"], o["steps"]) for o in journal], [("routine", "horario", "ok", 1)])
 
     async def test_params_are_asked_for_and_then_used(self) -> None:

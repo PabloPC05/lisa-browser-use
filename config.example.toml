@@ -1,19 +1,15 @@
 # Ejemplo de configuración del ejecutor. Los valores son ficticios.
 
-# Solo en la propia máquina: el puente llega desde lisa-av por la red de QEMU.
-listen = "127.0.0.1:8787"
-# Token que el puente presenta en cada petición. Solo lo leen el ejecutor y el puente.
-token_file = "/run/credentials/lisa-browser.service/executor-token"
 # Chromium del contenedor, por la red interna de Docker. Sin puertos publicados.
 cdp_endpoint = "http://172.30.0.2:9222"
 # Sitios donde se pregunta por defecto ante cualquier botón no reconocido como inofensivo.
 money_domains = []
 
-# El MCP del navegador (mcp_server.py), el destino `browser` del MCP único. Sin esta sección no se sirve.
+# El MCP del navegador (mcp_server.py), el destino `browser` del MCP único: lo único que sirve el ejecutor.
 [mcp]
 listen = "127.0.0.1:8789"
-# Clave que presenta el MCP único. Si falta, la misma que la API (`token_file`).
-# token_file = "/run/credentials/lisa-browser.service/mcp-token"
+# Clave que presenta el MCP único en cada petición.
+token_file = "/run/credentials/lisa-browser.service/executor-token"
 # Permisos permanentes («permitir siempre» enviar en un dominio). Por defecto, `reglas.json` junto al registro.
 # rules = "/var/lib/lisa-browser/reglas.json"
 
@@ -38,7 +34,7 @@ timezone = "Europe/Madrid"
 [limits]
 max_actions = 30
 operation_seconds = 300   # no cuenta lo que se espera a Pablo
-# El puente deja de preguntar a los 600 s; este plazo, algo mayor, es solo el respaldo.
+# El MCP deja de preguntar 15 s antes; este plazo es solo el respaldo.
 approval_seconds = 630
 code_seconds = 330
 

@@ -65,7 +65,7 @@ _STEP_KEYS = {
     "follow": {"text": str, "find": str, "read_chars": int},
     "task": {"goal": str, "verification": list, "inputs": dict, "constraints": list, "max_actions": int, "find": str,
              "read_chars": int},
-    "login": {"account": str, "method": str},
+    "login": {"account": str},
     "read": {"find": str, "max_chars": int},
 }
 
@@ -138,8 +138,6 @@ def check_steps(steps: Any) -> list[dict[str, Any]]:
             out[field] = value
         if op == "open" and not re.match(r"^(https?://|\{)", out.get("url", "")):
             raise LibraryError(f"paso {n}: `open` necesita una dirección http(s) en `url`")
-        if op == "login" and out.get("method", "password") not in ("password", "certificate"):
-            raise LibraryError(f"paso {n}: `method` de `login` es password o certificate")
         if op == "follow" and "text" not in out:
             raise LibraryError(f"paso {n}: `follow` necesita en `text` el texto del enlace")
         if op == "task":

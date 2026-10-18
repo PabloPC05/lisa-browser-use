@@ -1,5 +1,7 @@
 # Tareas — Browser Use (CU02)
 
+> **18-10-2026:** se quitaron la API HTTP, el navegador en vivo, el certificado digital y el pago con tarjeta (ver «Lo que se quitó» en el README). Lo que este documento dice de ellos es histórico.
+
 > Este documento se escribió en `lisa-project` (`specs/browser-use/`), cuando el ejecutor era el paquete
 > `packages/lisa-browser` de aquel repositorio. Donde dice `packages/lisa-browser/…`, léase la raíz de este;
 > los enlaces a `docs/NN` apuntan allí.
