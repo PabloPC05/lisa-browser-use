@@ -20,14 +20,14 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from lisa_browser.library import Library
 from lisa_browser import mcp_server
 from lisa_browser.mcp_server import BearerAuth, BrowserMcp, Rules
-from lisa_browser.server import Operation, Settings
+from lisa_browser.executor import Operation, Settings
 
 
 class FakeExecutor:
     """Hace lo que diga `script` con cada operación, como el ejecutor real: en un hilo y con eventos."""
 
     def __init__(self, tmp: Path, script: Callable[[Operation], dict[str, Any]]) -> None:
-        self.settings = Settings(token="t", approval_seconds=30, code_seconds=30)
+        self.settings = Settings(approval_seconds=30, code_seconds=30)
         self.uploads_dir = tmp / "subidas"
         self.uploads_dir.mkdir()
         self.library = Library(tmp / "biblioteca.sqlite")
@@ -153,12 +153,6 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         done = await self.call(browser, "answer", {"operation": asked["operation"], "codigo": " 654321 "})
         self.assertEqual(self.data(done)["got"], "654321")
 
-    async def test_without_forms_a_card_is_never_asked_by_chat(self) -> None:
-        _, browser = self.make(ask_secret("card"))
-        result = self.data(await self.call(browser, "card", {}))
-        self.assertEqual(result["status"], "ok")
-        self.assertNotIn("got", result)
-
     async def test_answer_to_nothing(self) -> None:
         _, browser = self.make(lambda op: {})
         result = self.data(await self.call(browser, "answer", {"operation": "op_nada", "permitir": True}))
@@ -183,12 +177,6 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         _, browser = self.make(ask_secret("code"))
         result = await self.call(browser, "login", {}, self.answering({"codigo": " 123456 "}))
         self.assertEqual(self.data(result)["got"], "123456")
-
-    async def test_card_fields_join_as_executor_expects(self) -> None:
-        _, browser = self.make(ask_secret("card"))
-        result = await self.call(browser, "card", {}, self.answering(
-            {"numero": "4111 1111 1111 1111", "caducidad": "12/27", "cvv": "123"}))
-        self.assertEqual(self.data(result)["got"], "4111 1111 1111 1111 12/27 123")
 
     async def test_declined_code_sends_nothing(self) -> None:
         _, browser = self.make(ask_secret("code"))
@@ -293,7 +281,7 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         _, browser = self.make(lambda op: {})
         names = {t.name for t in await browser.mcp.list_tools()}
         self.assertEqual(names, {
-            "open", "follow", "task", "read", "login", "save_password", "card", "attach", "screenshot", "sessions",
+            "open", "follow", "task", "read", "login", "save_password", "attach", "screenshot", "sessions",
             "logout", "log", "routine", "library", "downloads", "answer", "boe_search", "official_site", "user_step"})
 
     async def test_saved_downloads_are_listed(self) -> None:

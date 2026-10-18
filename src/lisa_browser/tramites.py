@@ -2,7 +2,7 @@
 
 Portado de lisa-agent (`src/tramites/official.ts` y `boe.ts`, commit 556fd39), que a su vez
 los tomó de SpainAssist (packages/shared/src/official.ts y packages/agent/src/research/boe.ts,
-commit 2de06d3, MIT © 2026 Pablo Rodríguez Caballero; ver sidecar/NOTICE).
+commit 2de06d3, MIT © 2026 Pablo Rodríguez Caballero; ver NOTICE).
 """
 
 from __future__ import annotations

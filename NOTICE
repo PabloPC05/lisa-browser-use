@@ -1,5 +1,5 @@
-El código de esta carpeta (salvo lisa.go y lisa_test.go) viene del sidecar de SpainAssist,
-https://github.com/MeLlamoPablo/SpainAssist, packages/sidecar/go, commit 2de06d3, con su licencia:
+Parte de src/lisa_browser/tramites.py (sedes oficiales y búsqueda en el BOE) viene de SpainAssist,
+https://github.com/MeLlamoPablo/SpainAssist, commit 2de06d3, a través de lisa-agent, con su licencia:
 
 MIT License
 
