@@ -11,7 +11,7 @@ Trabajan dos modelos, y casi todo el coste está en el primero:
 
 Por eso todo lo que este servicio hace por sí solo, sin devolver el control al planificador, abarata la tarea.
 
-Y lo que no necesita ningún modelo, mejor todavía: seguir un enlace por su nombre (`follow`) lo resuelve el servicio mirando la página, sin JEV, y sin equivocarse de enlace.
+Y lo que no necesita ningún modelo, mejor todavía: seguir un enlace por su nombre (`open` con `link`; en las rutinas, el paso `follow`) lo resuelve el servicio mirando la página, sin JEV, y sin equivocarse de enlace.
 
 El paquete de Python sigue llamándose `lisa_browser`: es el nombre que usa el servicio desplegado.
 
@@ -38,7 +38,6 @@ El paquete de Python sigue llamándose `lisa_browser`: es el nombre que usa el s
 | `library.py` | Biblioteca: sitios habituales y rutinas guardadas |
 | `journal.py` | Registro de operaciones en SQLite, sin secretos |
 | `mcp_server.py` | El MCP del navegador (destino `browser` del MCP único): herramientas, formularios a Pablo y resultados |
-| `tramites.py` | Sedes oficiales y búsqueda en el BOE |
 | `executor.py` | El ejecutor: una operación a la vez, con sus eventos y las respuestas de Pablo |
 | `__main__.py` | Arranque con un archivo de configuración; ver `config.example.toml` |
 
@@ -60,7 +59,7 @@ Sin memoria, cada gestión se redescubre: el planificador tantea direcciones y d
     { "op": "task", "goal": "Abrir las calificaciones", "verification": ["Se ve la tabla de calificaciones"], "find": "nota, total" }
   ]
 }
-// routine  { "name": "notas del campus", "params": { "asignatura": "Álgebra" } }
+// library  { "action": "run", "name": "notas del campus", "params": { "asignatura": "Álgebra" } }
 ```
 
 Una rutina guarda el objetivo de cada paso, no los clics: JEV vuelve a decidir sobre la página de ese momento, así que aguanta cambios pequeños de la web. Si un paso no sale, se detiene y dice cuál. No guarda contraseñas (el paso `login` usa el baúl y se salta si la sesión sigue abierta) y no rodea la barrera: enviar, borrar o pagar siguen pidiendo permiso. Detalle en [PLAN §12](docs/PLAN.md).
@@ -71,6 +70,7 @@ Para dejar el servicio más pequeño, Pablo quitó lo que ya no se usaba o no se
 
 - **La API HTTP** (`127.0.0.1:8787`: operaciones, subidas, descargas, registro y biblioteca). La usaba lisa-agent, retirado el 17-10-2026; el MCP llama directamente al ejecutor.
 - **El navegador en vivo** (`/v1/screencast`). Pablo lo había descartado.
+- **El BOE y las sedes oficiales** (`tramites.py`, herramientas `boe_search` y `official_site`), quitados el mismo día después.
 - **El certificado digital** (`certificate.py` y el proxy en Go `sidecar/`) y **el pago con tarjeta** (`card.py`, herramienta `card`). Nunca se probaron con una sede o una pasarela reales. Siguen en el historial de git (hasta el commit 132f524) por si hacen falta.
 
 La barrera sigue clasificando como «dinero» cualquier botón de pago y las capturas siguen ocultando los campos de tarjeta.

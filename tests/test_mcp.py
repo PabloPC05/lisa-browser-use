@@ -232,10 +232,31 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         missing = self.data(await self.call(browser, "library", {"action": "save_site"}))
         self.assertEqual(missing["status"], "ERROR")
 
-    async def test_official_site(self) -> None:
-        _, browser = self.make(lambda op: {})
-        self.assertTrue(self.data(await self.call(browser, "official_site", {"url": "https://sede.dgt.gob.es"}))["official"])
-        self.assertFalse(self.data(await self.call(browser, "official_site", {"url": "https://dgt-multas.com"}))["official"])
+    async def test_library_runs_a_routine(self) -> None:
+        executor, browser = self.make(lambda op: {"status": "ok", "routine": "Notas"})
+        result = self.data(await self.call(browser, "library", {"action": "run", "name": "Notas", "params": {"a": "b"}}))
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(executor.ran, [("routine", {"name": "Notas", "params": {"a": "b"}})])
+
+    async def test_open_follows_a_link_by_name(self) -> None:
+        executor, browser = self.make(lambda op: {"ok": True})
+        await self.call(browser, "open", {"link": "Horarios", "read_chars": 0})
+        self.assertEqual(executor.ran, [("follow", {"text": "Horarios", "read_chars": 0})])
+        for args in ({}, {"url": "https://ejemplo.es", "link": "Horarios"}):
+            self.assertEqual(self.data(await self.call(browser, "open", args))["status"], "invalid")
+        self.assertEqual(len(executor.ran), 1)
+
+    async def test_login_with_a_new_password(self) -> None:
+        executor, browser = self.make(lambda op: {"status": "ok"})
+        await self.call(browser, "login", {"account": "ana", "new_password": True})
+        await self.call(browser, "login", {})
+        self.assertEqual(executor.ran, [("save_password", {"account": "ana"}), ("login", {})])
+
+    async def test_sessions_can_log_out_first(self) -> None:
+        executor, browser = self.make(lambda op: {"status": "ok", "sessions": []})
+        await self.call(browser, "sessions", {"logout": "ejemplo.es"})
+        await self.call(browser, "sessions", {})
+        self.assertEqual(executor.ran, [("logout", {"domain": "ejemplo.es"}), ("sessions", {}), ("sessions", {})])
 
     async def test_user_step(self) -> None:
         _, browser = self.make(lambda op: {})
@@ -281,8 +302,8 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         _, browser = self.make(lambda op: {})
         names = {t.name for t in await browser.mcp.list_tools()}
         self.assertEqual(names, {
-            "open", "follow", "task", "read", "login", "save_password", "attach", "screenshot", "sessions",
-            "logout", "log", "routine", "library", "downloads", "answer", "boe_search", "official_site", "user_step"})
+            "open", "read", "task", "login", "attach", "screenshot", "sessions", "library", "downloads", "answer",
+            "user_step"})
 
     async def test_saved_downloads_are_listed(self) -> None:
         _, browser = self.make(lambda op: {})

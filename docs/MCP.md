@@ -6,7 +6,7 @@ Desde el 17-10-2026 el navegador se usa como un MCP: el destino `browser` del MC
 
 - **Lo que hay que preguntarle se pregunta en la ventana de su agente**, con un formulario MCP (*elicitation*): el permiso para enviar, borrar o pagar, el código de un segundo factor y una contraseña nueva. Lo que escribe en el formulario va del cliente al ejecutor; el modelo no lo ve y no puede contestar por él. Pablo prefirió esto a un aviso en el móvil o a una web con passkey, sabiendo que no todos los clientes admiten formularios y que los códigos pasan por el cliente.
 - **El agente ve las capturas**: `screenshot` devuelve la imagen. Antes iba solo al chat, no al modelo.
-- **Entra todo lo que ya existía**: navegar, leer, pasos con JEV, inicio de sesión con el baúl, rutinas, archivos y trámites (BOE y sedes oficiales). El certificado digital y el pago con tarjeta se quitaron el 18-10-2026 (ver el README).
+- **Entra todo lo que ya existía**: navegar, leer, pasos con JEV, inicio de sesión con el baúl, rutinas y archivos. El certificado digital, el pago con tarjeta, el BOE y las sedes oficiales se quitaron el 18-10-2026 (ver el README).
 - **Desde clientes sin formularios (claude.ai), los permisos se piden por el chat**, con este alcance: enviar y borrar, y los códigos de verificación, sí; pagar y una contraseña nueva, nunca. Pablo aceptó el riesgo: por el chat, quien pasa su «sí» al navegador es el modelo, y una página con instrucciones escondidas podría engañarlo para darlo por él; y el código lo ve el modelo (es de un solo uso).
 
 ## Cómo funciona
@@ -28,7 +28,7 @@ agente ──► mcp.example.com (Caddy, puerta con clave) ──► agentgatewa
 | `approval` | Formulario «¿Lo permites?». Con enviar, además «permitir siempre en este sitio» (regla `navegador:enviar:<dominio>` en `reglas.json`; nunca para borrar ni dinero). No contestar, rechazar o dejarlo sin marcar es `deny`. Si el cliente no admite formularios, también |
 | `secret` | Formulario con el código o la contraseña nueva. Si no contesta, no se envía nada y el ejecutor lo da por caducado |
 | `screenshot` | La imagen va en el resultado |
-| `done` | El resultado, en JSON compacto y sin `metrics` (siguen en `log`). Las descargas de hasta 10 MB van además dentro como recurso. Todas se guardan en el servidor (ver «Descargas») |
+| `done` | El resultado, en JSON compacto y sin `metrics` (siguen en el registro del servidor). Las descargas de hasta 10 MB van además dentro como recurso. Todas se guardan en el servidor (ver «Descargas») |
 
 Los formularios caducan 15 s antes que el plazo del ejecutor (`approval_seconds`, `code_seconds`), para que el ejecutor reciba siempre una respuesta.
 
@@ -36,19 +36,19 @@ Los formularios caducan 15 s antes que el plazo del ejecutor (`approval_seconds`
 
 | Herramienta | Uso |
 |---|---|
-| `open`, `follow`, `read` | Abrir, seguir un enlace sin modelo y leer, con `find` para extraer solo lo que interesa |
+| `open`, `read` | Abrir una dirección (`url`) o seguir un enlace por su nombre sin modelo (`link`), y leer; con `find` para extraer solo lo que interesa |
 | `task` | Un paso acotado con JEV (escribir, pulsar, rellenar), detrás de la barrera de aprobaciones |
-| `login`, `save_password` | Entrar con el baúl; cambiar la contraseña guardada |
+| `login` | Entrar con el baúl; con `new_password`, cambiar la contraseña guardada |
 | `attach` | Adjuntar un archivo que el agente manda en base64 o por una URL https de internet (hasta 100 MB) |
-| `screenshot`, `sessions`, `logout`, `log` | Captura, sesiones abiertas, cerrar sesión y registro |
+| `screenshot`, `sessions` | Captura; sesiones abiertas, y cerrar una o todas con `logout` |
 | `downloads` | Las descargas guardadas en el servidor, de la más reciente a la más antigua |
 | `answer` | La respuesta de Pablo, dada en el chat, a una operación parada con `NEEDS_APPROVAL` o `NEEDS_CODE` |
-| `routine`, `library` | Rutinas y sitios guardados |
-| `boe_search`, `official_site`, `user_step` | Trámites: buscar la norma en el BOE, comprobar que una sede es oficial y pedir a Pablo un paso a mano (Cl@ve, captcha) |
+| `library` | Sitios y rutinas guardados; `run` ejecuta una rutina |
+| `user_step` | Pedir a Pablo un paso a mano (Cl@ve, captcha) |
 
 `attach` solo descarga de direcciones https públicas (nada de la red de casa, Tailscale ni el propio servidor) y sin seguir redirecciones.
 
-Las descripciones y las pautas (`INSTRUCTIONS`) vienen de lisa-agent (`src/tools/browser.ts`, `library.ts` y `tramites.ts`, commit 556fd39), adaptadas a cualquier agente. `tramites.py` porta su lista de 212 sedes oficiales y su cliente del BOE, que a su vez venían de SpainAssist.
+Las descripciones y las pautas (`INSTRUCTIONS`) vienen de lisa-agent (`src/tools/browser.ts` y `library.ts`, commit 556fd39), adaptadas a cualquier agente. El 18-10-2026 las 18 herramientas se juntaron en 11: `follow` pasó a `open` con `link`, `save_password` a `login` con `new_password`, `logout` a `sessions`, `routine` a `library` con `run`, y se quitaron `log`, `boe_search` y `official_site`.
 
 ## Descargas
 
