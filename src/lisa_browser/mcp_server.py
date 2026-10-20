@@ -7,8 +7,8 @@ barrera de aprobaciones y el registro.
 Lo que antes preguntaba el chat de Lisa (permiso para enviar, borrar o pagar, el código de un
 segundo factor o una contraseña nueva) se pregunta ahora a Pablo con un formulario
 MCP (elicitation) en la ventana de su agente. El modelo no ve lo que Pablo escribe ahí y no puede
-contestar por él. Si el cliente no admite formularios, la acción no se hace (DENIED) y el código
-no se envía.
+contestar por él. Si el cliente no admite formularios, o los rechaza sin enseñarlos, enviar, borrar
+y los códigos se preguntan por el chat; lo demás no se hace (DENIED) o no se envía.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import logging
 import mimetypes
 import socket
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,6 +54,9 @@ KEEPALIVE_SECONDS = 30.0
 WAITING_TEXT = "Esperando a que Pablo conteste el formulario"
 #: Lo mismo cuando la operación lleva KEEPALIVE_SECONDS sin novedades (en la cola, o un paso largo).
 WORKING_TEXT = "El navegador sigue trabajando"
+#: Un «no» al formulario que llega antes de esto no es de Pablo: el cliente lo rechaza sin enseñarlo (t3code,
+#: 20-10-2026, en menos de un segundo). Se trata como un cliente sin formularios.
+HUMAN_SECONDS = 2.0
 
 # Parámetros comunes. A nivel de módulo: FastMCP resuelve las anotaciones con los globales del módulo.
 Find = Annotated[str | None, Field(description="Términos separados por comas; devuelve solo los fragmentos que los contienen")]
@@ -185,6 +189,7 @@ async def _ask(ctx: Context, message: str, schema: type[BaseModel], seconds: flo
 
 
 async def _elicit(ctx: Context, message: str, schema: type[BaseModel], seconds: float) -> BaseModel | str:
+    started = time.monotonic()
     try:
         with anyio.fail_after(max(5.0, seconds)):
             answer = await ctx.elicit(message=message, schema=schema)
@@ -193,7 +198,22 @@ async def _elicit(ctx: Context, message: str, schema: type[BaseModel], seconds: 
     except McpError as exc:
         log.info("el cliente no admite formularios: %s", exc)
         return "unsupported"
-    return answer.data if answer.action == "accept" else "declined"
+    if answer.action == "accept":
+        return answer.data
+    elapsed = time.monotonic() - started
+    if elapsed < HUMAN_SECONDS:
+        log.info("formulario rechazado en %.2f s (%s, cliente %s): se toma como cliente sin formularios",
+                 elapsed, answer.action, _client_name(ctx))
+        return "unsupported"
+    return "declined"
+
+
+def _client_name(ctx: Context) -> str:
+    try:
+        info = ctx.session.client_params.clientInfo
+        return f"{info.name} {info.version}"
+    except AttributeError:
+        return "desconocido"
 
 
 def _compact(value: Any) -> Any:

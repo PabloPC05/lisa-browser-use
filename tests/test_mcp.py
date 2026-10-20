@@ -73,6 +73,12 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(executor.library.close)
         return executor, BrowserMcp(executor, Rules(self.tmp / "reglas.json"))  # type: ignore[arg-type]
 
+    def human_answers(self) -> None:
+        """Los «no» de estas pruebas llegan al momento: que cuenten como de Pablo."""
+        patcher = mock.patch.object(mcp_server, "HUMAN_SECONDS", 0.0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def answering(self, content: dict[str, Any] | None, action: str = "accept") -> Any:
         async def callback(context: Any, params: types.ElicitRequestParams) -> types.ElicitResult:
             self.forms.append(params.message)
@@ -113,6 +119,26 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         result = await self.call(browser, "task", {"goal": "Pagar", "verification": ["Pagado"]},
                                  self.answering(None, action="decline"))
         self.assertEqual(self.data(result)["status"], "DENIED")
+
+    async def test_a_no_by_form_denies_sending(self) -> None:
+        self.human_answers()
+        _, browser = self.make(ask_approval("enviar"))
+        result = await self.call(browser, "task", {"goal": "Enviar", "verification": ["Enviado"]},
+                                 self.answering(None, action="decline"))
+        self.assertEqual(self.data(result)["status"], "DENIED")
+
+    async def test_instant_decline_is_asked_by_chat(self) -> None:
+        # Como t3code: dice que admite formularios, pero los rechaza al momento sin enseñarlos.
+        _, browser = self.make(ask_approval("enviar"))
+        parked = await self.call(browser, "task", {"goal": "Enviar", "verification": ["Enviado"]},
+                                 self.answering(None, action="decline"))
+        self.assertEqual(self.data(parked)["status"], "NEEDS_APPROVAL")
+        self.assertEqual(len(self.forms), 1)
+
+    async def test_instant_cancel_of_a_code_is_asked_by_chat(self) -> None:
+        _, browser = self.make(ask_secret("code"))
+        result = await self.call(browser, "login", {}, self.answering(None, action="cancel"))
+        self.assertEqual(self.data(result)["status"], "NEEDS_CODE")
 
     async def test_unchecked_box_denies(self) -> None:
         _, browser = self.make(ask_approval("borrar"))
@@ -179,6 +205,7 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.data(result)["got"], "123456")
 
     async def test_declined_code_sends_nothing(self) -> None:
+        self.human_answers()
         _, browser = self.make(ask_secret("code"))
         result = await self.call(browser, "login", {}, self.answering(None, action="cancel"))
         self.assertNotIn("got", self.data(result))
