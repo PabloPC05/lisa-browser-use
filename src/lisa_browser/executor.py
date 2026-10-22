@@ -43,6 +43,8 @@ class Settings:
     approval_seconds: float = 600.0
     code_seconds: float = 300.0
     price_per_mtok: float = 0.0
+    # El aviso de Lisa web mientras Pablo tiene el control del navegador (ver manual_control_until).
+    manual_control: Path | None = None
 
 
 @dataclass
@@ -115,6 +117,21 @@ def _text_of(read: dict[str, Any]) -> dict[str, Any]:
     return {k: read[k] for k in ("text", "matches", "truncated", "total_chars", "next_offset") if k in read}
 
 
+def manual_control_until(path: Path | None) -> datetime | None:
+    """Hasta cuándo tiene Pablo el control del navegador desde Lisa web, o None si no lo tiene.
+
+    Lisa web escribe el aviso ({"hasta": ISO 8601}) al tomar el control, lo renueva mientras lo usa
+    y lo borra al soltarlo; si se queda escrito, deja de valer cuando caduca.
+    """
+    if path is None:
+        return None
+    try:
+        until = datetime.fromisoformat(json.loads(path.read_text())["hasta"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return until if until > datetime.now(timezone.utc) else None
+
+
 class Executor:
     """Navegador, política de decisión, baúl, archivos y registro compartidos por las operaciones."""
 
@@ -167,11 +184,17 @@ class Executor:
             self._lock.release()
 
     def _run_locked(self, operation: Operation) -> dict[str, Any]:
+        # Mientras Pablo usa el navegador desde Lisa web, nada lo toca a la vez.
+        if operation.op != "log" and manual_control_until(self.settings.manual_control) is not None:
+            return {"status": "BLOCKED", "reason": "manual_control",
+                    "message": "Pablo tiene el control del navegador desde Lisa web. Espera a que lo suelte "
+                               "(pregúntale con user_step si hace falta) y vuelve a intentarlo."}
         goal = (operation.args.get("goal") or operation.args.get("url") or operation.args.get("domain")
                 or operation.args.get("name"))
         journal_id = self._journal.start(operation.conversation, operation.op, goal)
         used_before = self._usage.copy() if self._usage else Usage()
         started = time.monotonic()
+        stop_watch, taken_over = self._watch_manual_control(operation)
         try:
             result = self._dispatch(operation, journal_id)
         except Exception as exc:
@@ -183,6 +206,11 @@ class Executor:
             else:
                 log.exception("la operación %s falló", operation.op)
                 result = {"status": "ERROR", "reason": type(exc).__name__}
+        finally:
+            stop_watch.set()
+        if taken_over.is_set():
+            result["manual_control"] = ("Pablo ha tomado el control del navegador desde Lisa web en mitad de la "
+                                        "operación: mira dónde ha quedado la página antes de seguir.")
         spent = self._usage.since(used_before) if self._usage else Usage()
         sites = []
         if self._browser is not None and operation.op in _COLLECT_AFTER:
@@ -353,6 +381,19 @@ class Executor:
         elif outputs:
             done["results"] = outputs
         return done
+
+    def _watch_manual_control(self, operation: Operation) -> tuple[threading.Event, threading.Event]:
+        """Si Pablo toma el control en mitad de la operación, esta se cancela en su siguiente paso."""
+        stop, taken = threading.Event(), threading.Event()
+        if self.settings.manual_control is not None:
+            def watch() -> None:
+                while not stop.wait(1.0):
+                    if manual_control_until(self.settings.manual_control) is not None:
+                        taken.set()
+                        operation.cancel.set()
+                        return
+            threading.Thread(target=watch, name="control-manual", daemon=True).start()
+        return stop, taken
 
     def _ensure_browser(self) -> Browser:
         if self._browser is not None and self._browser_is_dead():

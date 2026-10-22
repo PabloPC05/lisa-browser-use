@@ -59,6 +59,7 @@ def main() -> None:
             approval_seconds=float(limits.get("approval_seconds", 600)),
             code_seconds=float(limits.get("code_seconds", 300)),
             price_per_mtok=transport.price_per_mtok,
+            manual_control=Path(paths["manual_control"]) if paths.get("manual_control") else None,
         ),
         connect=lambda: Browser.connect(
             cfg["cdp_endpoint"], locale=identity.get("locale", ""), timezone=identity.get("timezone", ""),
