@@ -203,7 +203,9 @@ def _entry_for(browser: Browser, vault: Vault, account: str) -> tuple[Entry | No
     wanted = account.strip().lower()
     if wanted:
         named = [e for e in entries if wanted in e.username.lower() or wanted in e.name.lower()]
-        exact = [e for e in named if wanted == e.username.lower()]
+        # El nombre completo o el usuario completo mandan sobre lo que solo los contiene: «github.com» elige la
+        # entrada «github.com» aunque también haya una «libretube.github.com» con el mismo usuario.
+        exact = [e for e in named if wanted in (e.username.lower(), e.name.lower())]
         entries = exact or named or entries
     if len(entries) > 1:
         # Solo hay un intento de contraseña: no se adivina la cuenta.
