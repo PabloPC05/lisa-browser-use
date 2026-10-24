@@ -151,6 +151,13 @@ class SeveralAccounts(LoginCase):
         self.assertEqual(self.secrets, [PASSWORD])
         self.assertEqual(self.where(), "dentro")
 
+    def test_the_whole_name_picks_one_entry_even_if_another_contains_it(self) -> None:
+        same_user = Entry("e3", "otra.socios.test", USER, "otra-clave-1111", ("http://socios.test/",))
+        named = Entry(ENTRY.id, "socios.test", USER, PASSWORD, ENTRY.uris)
+        result = self.login("/login", TYPE_AND_ENTER + [("SUBTASK_COMPLETE",)], vault=FakeVault([same_user, named]), account="socios.test")
+        self.assertEqual(result, {"status": "ok", "domain": "socios.test"})
+        self.assertEqual(self.secrets, [PASSWORD])
+
     def test_a_hint_that_fits_several_accounts_still_asks(self) -> None:
         result = self.login("/login", TYPE_AND_ENTER, vault=self.vault(), account="biblioteca")
         self.assertEqual((result["status"], len(result["accounts"])), ("choose_account", 2))
