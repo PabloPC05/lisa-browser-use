@@ -1,6 +1,6 @@
 # MCP del navegador
 
-Desde el 17-10-2026 el navegador se usa como un MCP: el destino `browser` del MCP único de Pablo (`https://mcp.example.com/todo/mcp`). Así lo maneja cualquier agente que Pablo conecte (Claude Code, claude.ai, Codex…), y no solo el chat de Lisa, que se retiró ese día junto con lisa-agent.
+Desde el 17-10-2026 el navegador se usa como un MCP: el destino `browser` del Badulaque, el MCP universal de Pablo (`https://mcp.example.com/todo/mcp`). Así lo maneja cualquier agente que Pablo conecte (Claude Code, claude.ai, Codex…), y no solo el chat de Lisa, que se retiró ese día junto con lisa-agent.
 
 ## Decisiones de Pablo (17-10-2026)
 
@@ -12,12 +12,12 @@ Desde el 17-10-2026 el navegador se usa como un MCP: el destino `browser` del MC
 ## Cómo funciona
 
 ```text
-agente ──► mcp.example.com (Caddy, puerta con clave) ──► agentgateway (MCP único)
+agente ──► mcp.example.com (Caddy, puerta con clave) ──► agentgateway (Badulaque)
                                                           └─► 127.0.0.1:8789/mcp (este servicio, con su clave)
 ```
 
 - `mcp_server.py` es un servidor MCP (SDK oficial de Python, Streamable HTTP) y lo único que sirve el servicio. Cada herramienta crea una operación del ejecutor (`executor.py`): una cola (una operación a la vez), la barrera de aprobaciones y el registro.
-- Se configura en `[mcp]` (ver `config.example.toml`). Exige `Authorization: Bearer <clave>` (`[mcp].token_file`), que pone el MCP único (su `browser.token`).
+- Se configura en `[mcp]` (ver `config.example.toml`). Exige `Authorization: Bearer <clave>` (`[mcp].token_file`), que pone el Badulaque (su `browser.token`).
 - agentgateway antepone `browser_` a cada herramienta: `open` se ve como `browser_open`. Se comprobó el 17-10-2026 que agentgateway 1.6.0 deja pasar los formularios entre el servidor y el cliente, también con varios destinos juntos.
 
 ### Eventos del ejecutor
@@ -60,7 +60,7 @@ Decisión de Pablo (17-10-2026): todas las descargas se quedan en el servidor, e
 - **Los formularios no llevan la captura**: solo texto (acción, dominio y campos rellenos). Si Pablo quiere verla antes de aprobar, el agente puede pedir `screenshot`.
 - **Los datos sensibles van en formulario normal.** La especificación de MCP prefiere el modo URL para eso, pero Claude Code no lo anunciaba bien en la versión de octubre; se usa el modo formulario, con lo que el código pasa por el cliente (nunca por el modelo ni por el registro del ejecutor).
 - **Una llamada larga solo sobrevive si le llega algo cada pocos minutos.** La llamada sigue abierta hasta que la operación termina (como mucho `operation_seconds`, más lo que tarde Pablo en contestar), pero Claude Code es Node y su `fetch` (undici) corta una respuesta que pasa 300 s sin recibir nada (`bodyTimeout`, error `UND_ERR_BODY_TIMEOUT`). El SDK manda un «ping» de SSE cada 15 s, pero agentgateway no los reenvía. Así que, mientras un formulario espera respuesta, `_ask` manda cada 30 s (`KEEPALIVE_SECONDS`) «Esperando a que Pablo conteste el formulario». Lo manda como aviso de progreso, si el cliente lo pidió, y como mensaje de registro (`info`), los dos por la respuesta de la llamada. Además, otro mensaje de registro sin ligar a la llamada va por el flujo GET de la sesión, que se corta igual. Los avisos paran en cuanto Pablo contesta, rechaza o el formulario caduca. Comprobado el 17-10-2026 con un cliente Node, sin contestar a `user_step`: por `https://mcp.example.com/todo/mcp` y sin estos avisos se cortaron la llamada y el GET a los 300 s justos. Con un agentgateway 1.6.0 de prueba delante del código nuevo, los tres avisos llegaron y la llamada pasó de los 400 s. Fuera de los formularios, si la operación pasa 30 s sin novedades (en la cola detrás de otra, o un paso largo), se manda igual «El navegador sigue trabajando», así que ninguna llamada se queda callada 300 s. Si el cliente corta, la operación se cancela en el siguiente paso.
-- **Un reinicio del MCP único o de este servicio corta las sesiones abiertas**: el cliente tiene que reconectarse.
+- **Un reinicio del Badulaque o de este servicio corta las sesiones abiertas**: el cliente tiene que reconectarse.
 
 ## Despliegue
 

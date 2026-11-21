@@ -5,10 +5,10 @@ cdp_endpoint = "http://172.30.0.2:9222"
 # Sitios donde se pregunta por defecto ante cualquier botón no reconocido como inofensivo.
 money_domains = []
 
-# El MCP del navegador (mcp_server.py), el destino `browser` del MCP único: lo único que sirve el ejecutor.
+# El MCP del navegador (mcp_server.py), el destino `browser` del Badulaque: lo único que sirve el ejecutor.
 [mcp]
 listen = "127.0.0.1:8789"
-# Clave que presenta el MCP único en cada petición.
+# Clave que presenta el Badulaque en cada petición.
 token_file = "/run/credentials/lisa-browser.service/executor-token"
 # Permisos permanentes («permitir siempre» enviar en un dominio). Por defecto, `reglas.json` junto al registro.
 # rules = "/var/lib/lisa-browser/reglas.json"

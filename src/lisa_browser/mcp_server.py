@@ -1,7 +1,7 @@
-"""Servidor MCP del navegador: el destino `browser` del MCP único.
+"""Servidor MCP del navegador: el destino `browser` del Badulaque.
 
-Cualquier agente conectado al MCP único (Claude Code, claude.ai, Codex...) usa el navegador de
-Lisa con estas herramientas, que llaman directamente al ejecutor (executor.py): una cola, la
+Cualquier agente conectado al Badulaque (Claude Code, claude.ai, Codex...) usa el navegador de
+lisa con estas herramientas, que llaman directamente al ejecutor (executor.py): una cola, la
 barrera de aprobaciones y el registro.
 
 Lo que antes preguntaba el chat de Lisa (permiso para enviar, borrar o pagar, el código de un
@@ -611,7 +611,7 @@ class BrowserMcp:
 
 
 class BearerAuth:
-    """Exige `Authorization: Bearer <token>` en cada petición HTTP (lo pone el MCP único)."""
+    """Exige `Authorization: Bearer <token>` en cada petición HTTP (lo pone el Badulaque)."""
 
     def __init__(self, app: Any, token: str) -> None:
         self.app = app

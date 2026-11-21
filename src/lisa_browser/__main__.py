@@ -77,7 +77,7 @@ def main() -> None:
         # Fuera de la carpeta del contenedor del navegador: aquí no llega ninguna web.
         saved_downloads_dir=Path(paths.get("saved_downloads") or Path(paths["journal"]).with_name("descargas")),
     )
-    # El MCP del navegador (mcp_server.py), el destino `browser` del MCP único, con la clave que este presenta.
+    # El MCP del navegador (mcp_server.py), el destino `browser` del Badulaque, con la clave que este presenta.
     m = cfg["mcp"]
     host, _, port = m.get("listen", "127.0.0.1:8789").partition(":")
     browser_mcp = BrowserMcp(executor, Rules(Path(m.get("rules") or Path(paths["journal"]).with_name("reglas.json"))),

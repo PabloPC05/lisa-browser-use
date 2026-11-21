@@ -1,12 +1,12 @@
 # lisa-browser-use
 
-El navegador de Lisa. Un servicio que maneja un Chromium propio y hace en él lo que le pide el agente de Pablo, sea cual sea (se conecta como MCP, ver [docs/MCP.md](docs/MCP.md)): abrir y leer páginas, dar pasos en ellas, iniciar sesión con el baúl de contraseñas, descargar y adjuntar archivos, y repetir gestiones que ya sabe hacer.
+El navegador de lisa. Un servicio que maneja un Chromium propio y hace en él lo que le pide el agente de Pablo, sea cual sea (se conecta como MCP, ver [docs/MCP.md](docs/MCP.md)): abrir y leer páginas, dar pasos en ellas, iniciar sesión con el baúl de contraseñas, descargar y adjuntar archivos, y repetir gestiones que ya sabe hacer.
 
 Trabajan dos modelos, y casi todo el coste está en el primero:
 
 | Quién | Qué decide | Coste |
 |---|---|---|
-| El planificador (el agente que use Pablo, conectado por el MCP único; hasta el 17-10-2026, [lisa-agent](https://github.com/PabloPC05/lisa-agent)) | Qué página abrir y qué paso pedir | El del modelo grande, en cada llamada |
+| El planificador (el agente que use Pablo, conectado por el Badulaque, el MCP universal de Pablo; hasta el 17-10-2026, [lisa-agent](https://github.com/PabloPC05/lisa-agent)) | Qué página abrir y qué paso pedir | El del modelo grande, en cada llamada |
 | JEV, dentro de este servicio | Cada clic y cada tecla de un paso, sobre los elementos accesibles de la página, sin capturas | 0,042 $ por millón de tokens de entrada |
 
 Por eso todo lo que este servicio hace por sí solo, sin devolver el control al planificador, abarata la tarea.
@@ -37,7 +37,7 @@ El paquete de Python sigue llamándose `lisa_browser`: es el nombre que usa el s
 | `files.py` | Adjuntar archivos, recoger descargas, listar y cerrar sesiones |
 | `library.py` | Biblioteca: sitios habituales y rutinas guardadas |
 | `journal.py` | Registro de operaciones en SQLite, sin secretos |
-| `mcp_server.py` | El MCP del navegador (destino `browser` del MCP único): herramientas, formularios a Pablo y resultados |
+| `mcp_server.py` | El MCP del navegador (destino `browser` del Badulaque): herramientas, formularios a Pablo y resultados |
 | `executor.py` | El ejecutor: una operación a la vez, con sus eventos y las respuestas de Pablo |
 | `__main__.py` | Arranque con un archivo de configuración; ver `config.example.toml` |
 
@@ -85,7 +85,7 @@ nix-shell --run "python -m unittest discover -s tests -t . -v"
 
 ## Despliegue
 
-Corre en el servidor de Lisa como el servicio `lisa-browser`, junto a un Chromium en un contenedor; lo define `hosts/lisa/navegador.nix` del repositorio [lisa](https://github.com/PabloPC05/lisa). Solo escucha en `127.0.0.1:8789` (el MCP), y cada petición lleva su clave.
+Corre en el servidor lisa como el servicio `lisa-browser`, junto a un Chromium en un contenedor; lo define `hosts/lisa/navegador.nix` del repositorio [lisa](https://github.com/PabloPC05/lisa). Solo escucha en `127.0.0.1:8789` (el MCP), y cada petición lleva su clave.
 
 Desde el 12-10-2026 el servicio ejecuta este repositorio, clonado en `/srv/lisa/lisa-browser-use` (desde el 17-10-2026, del repositorio público por HTTPS, sin clave). Actualizarlo:
 
